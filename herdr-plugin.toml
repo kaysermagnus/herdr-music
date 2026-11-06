@@ -1,0 +1,63 @@
+id = "cesar.music"
+name = "Music"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "TUI music controller — Spotify via OAuth, extensible to more providers"
+platforms = ["linux", "macos"]
+
+[[build]]
+command = ["cargo", "build", "--release"]
+
+[[panes]]
+id = "player"
+title = "Music"
+placement = "split"
+command = ["./target/release/herdr-music", "tui"]
+
+[[actions]]
+id = "open"
+title = "Open music player"
+contexts = ["workspace"]
+command = ["sh", "-c", "\"$HERDR_BIN_PATH\" plugin pane open --plugin cesar.music --entrypoint player"]
+
+[[actions]]
+id = "play-pause"
+title = "Play / Pause"
+contexts = ["workspace"]
+command = ["./target/release/herdr-music", "ctl", "play-pause"]
+
+[[actions]]
+id = "stop"
+title = "Stop"
+contexts = ["workspace"]
+command = ["./target/release/herdr-music", "ctl", "stop"]
+
+[[actions]]
+id = "next"
+title = "Next track"
+contexts = ["workspace"]
+command = ["./target/release/herdr-music", "ctl", "next"]
+
+[[actions]]
+id = "previous"
+title = "Previous track"
+contexts = ["workspace"]
+command = ["./target/release/herdr-music", "ctl", "previous"]
+
+[[actions]]
+id = "forward"
+title = "Forward 10s"
+contexts = ["workspace"]
+command = ["./target/release/herdr-music", "ctl", "forward"]
+
+[[actions]]
+id = "rewind"
+title = "Rewind 10s"
+contexts = ["workspace"]
+command = ["./target/release/herdr-music", "ctl", "rewind"]
+
+[[actions]]
+id = "spotify-login"
+title = "Connect Spotify account"
+contexts = ["workspace"]
+command = ["./target/release/herdr-music", "auth", "login"]
