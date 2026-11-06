@@ -133,8 +133,9 @@ description = "music play/pause"
 ## Development
 
 ```sh
-cargo test            # 46 tests: unit + stub-server integration
+cargo test            # unit + stub-server integration tests
 cargo build --release
 ```
 
-Spec and task breakdown: `SPEC.md`, `tasks.md`.
+Specs live in `specs/`: the original plugin spec is `specs/initial.md`,
+with its task breakdown in `specs/initial-tasks.md`.

@@ -267,7 +267,7 @@ or implementation structure.
 - **CLI dispatch**: `ctl` argument parsing and exit codes via
   `assert_cmd`-style integration tests only if cheap; otherwise dispatch is
   kept thin enough to cover through provider-level tests.
-- **Workflow**: strict TDD — each task in `tasks.md` writes the failing
+- **Workflow**: strict TDD — each task in `initial-tasks.md` writes the failing
   test at the seam first, then the implementation, then refactor.
 - **Prior art**: none — greenfield project. This spec establishes the
   convention: `tests/` for seam-level integration, `#[cfg(test)]` modules
