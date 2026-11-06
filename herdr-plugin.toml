@@ -10,15 +10,16 @@ command = ["cargo", "build", "--release"]
 
 # Local playback engine. Pinned to local::ENGINE_VERSION in the code.
 # rustls-tls-webpki-roots on every OS (native-tls needs OpenSSL headers on
-# Linux); no discovery feature (the engine logs in with a token); rodio on
-# macOS/Windows (CoreAudio/WASAPI), pipe backend on Linux (no ALSA headers).
+# Linux); with-libmdns for zeroconf sign-in (OAuth tokens get no audio
+# keys upstream); rodio on macOS/Windows (CoreAudio/WASAPI), pipe backend
+# on Linux (no ALSA headers).
 [[build]]
 platforms = ["linux"]
-command = ["cargo", "install", "librespot", "--version", "0.8.0", "--locked", "--root", "./target/librespot", "--no-default-features", "--features", "rustls-tls-webpki-roots"]
+command = ["cargo", "install", "librespot", "--version", "0.8.0", "--locked", "--root", "./target/librespot", "--no-default-features", "--features", "rustls-tls-webpki-roots,with-libmdns"]
 
 [[build]]
 platforms = ["macos", "windows"]
-command = ["cargo", "install", "librespot", "--version", "0.8.0", "--locked", "--root", "./target/librespot", "--no-default-features", "--features", "rustls-tls-webpki-roots,rodio-backend"]
+command = ["cargo", "install", "librespot", "--version", "0.8.0", "--locked", "--root", "./target/librespot", "--no-default-features", "--features", "rustls-tls-webpki-roots,rodio-backend,with-libmdns"]
 
 [[panes]]
 id = "player"

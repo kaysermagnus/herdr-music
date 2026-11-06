@@ -41,10 +41,9 @@ local_playback = true          # set false to stay a pure remote control
 local_device_name = "Herdr Music"
 ```
 
-The first time local playback starts, your browser opens the engine's
-own Spotify sign-in (`http://127.0.0.1:8877/`) — the Connect engine can't
-use Web API tokens, so it does one OAuth of its own and caches the
-credentials. Later opens skip it.
+The first time local playback starts, "Herdr Music" appears as a device
+in your Spotify app — pick it once to sign the engine in (that handshake
+gives it the credentials audio decryption needs, cached for later).
 
 ## Install
 

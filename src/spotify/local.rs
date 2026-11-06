@@ -8,27 +8,25 @@ use std::path::{Path, PathBuf};
 pub const ENGINE_VERSION: &str = "0.8.0";
 const ENGINE_ENV: &str = "HERDR_MUSIC_ENGINE";
 
-/// Port for the engine's OAuth redirect catcher (127.0.0.1 only).
-pub const OAUTH_PORT: u16 = 8877;
-
-/// The credentials file the engine's OAuth writes into `cache_dir`.
+/// The credentials file the engine stores Connect credentials in. These
+/// are minted by a zeroconf handshake the first time the user picks this
+/// device in their Spotify app — OAuth-token credentials get no audio
+/// keys (upstream librespot#1737).
 pub fn credentials_path(cache_dir: &std::path::Path) -> PathBuf {
     cache_dir.join("credentials.json")
 }
 
-/// librespot argv for `os` (a `std::env::consts::OS` value). Discovery
-/// isn't built into our binary, so no flag disables it. Linux writes PCM
-/// to stdout for the sink to consume; macOS/Windows play through rodio
-/// (CoreAudio/WASAPI).
+/// librespot argv for `os` (a `std::env::consts::OS` value). The binary
+/// is built with-libmdns, so zeroconf discovery is on: the first connect
+/// from a Spotify app hands it keymaster-capable credentials, cached in
+/// `cache_dir` for later starts. Linux writes PCM to stdout for the sink
+/// to consume; macOS/Windows play through rodio (CoreAudio/WASAPI).
 pub fn engine_argv(os: &str, name: &str, cache_dir: &std::path::Path) -> Vec<String> {
     let mut args = vec![
         "--name".to_string(),
         name.to_string(),
         "--device-type".to_string(),
         "computer".to_string(),
-        "--enable-oauth".to_string(),
-        "--oauth-port".to_string(),
-        OAUTH_PORT.to_string(),
         "--system-cache".to_string(),
         cache_dir.to_string_lossy().into_owned(),
         "--disable-audio-cache".to_string(),
@@ -188,9 +186,7 @@ mod tests {
             let pos = |flag: &str| a.iter().position(|x| x == flag).unwrap();
             assert_eq!(a[pos("--name") + 1], "Herdr Music");
             assert_eq!(a[pos("--device-type") + 1], "computer");
-            assert_eq!(a[pos("--oauth-port") + 1], OAUTH_PORT.to_string());
             assert_eq!(a[pos("--system-cache") + 1], "/cache");
-            assert!(a.contains(&"--enable-oauth".to_string()));
             assert!(a.contains(&"--disable-audio-cache".to_string()));
             // Credentials must be cached — the engine's OAuth mints them.
             assert!(!a.contains(&"--disable-credential-cache".to_string()));

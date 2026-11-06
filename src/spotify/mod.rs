@@ -26,11 +26,10 @@ enum Phase {
         engine: crate::engine::Engine,
         name: String,
         at: Instant,
-        /// True while waiting for the user to complete the engine's
-        /// browser sign-in (extends the readiness deadline).
+        /// True while waiting for the user to sign the engine in by
+        /// picking this device in their Spotify app (extends the
+        /// readiness deadline — it's human-paced).
         oauth_pending: bool,
-        /// Set once we've opened the scraped sign-in URL in a browser.
-        oauth_opened: bool,
     },
     Ready {
         engine: crate::engine::Engine,
@@ -297,7 +296,6 @@ impl MusicProvider for SpotifyProvider {
                     name: name.to_string(),
                     at: Instant::now(),
                     oauth_pending: inv.oauth_pending,
-                    oauth_opened: false,
                 };
                 Ok(())
             }
@@ -327,20 +325,7 @@ impl MusicProvider for SpotifyProvider {
                 name,
                 at,
                 oauth_pending,
-                oauth_opened,
             } => {
-                if *oauth_pending && !*oauth_opened {
-                    if let Some(url) = engine.oauth_url() {
-                        // Credentials absent: the engine printed its
-                        // sign-in URL — send the user through it once.
-                        if let Some((prog, args)) =
-                            auth::browser_launch_command(std::env::consts::OS, &url)
-                        {
-                            let _ = std::process::Command::new(prog).args(args).spawn();
-                        }
-                        *oauth_opened = true;
-                    }
-                }
                 let timeout = if *oauth_pending {
                     OAUTH_TIMEOUT
                 } else {
@@ -352,10 +337,11 @@ impl MusicProvider for SpotifyProvider {
                         .unwrap_or_else(|| "engine exited".into());
                     Step::Fail(format!("local engine exited: {line}"))
                 } else if at.elapsed() > timeout {
-                    Step::Fail(format!(
-                        "local engine did not register within {}s",
-                        timeout.as_secs()
-                    ))
+                    Step::Fail(if *oauth_pending {
+                        "pick this device in your Spotify app once to sign it in".into()
+                    } else {
+                        format!("local engine did not register within {READY_TIMEOUT:?}")
+                    })
                 } else {
                     match self.devices() {
                         // Absent from the list or a transient API error:

@@ -451,14 +451,16 @@ drive.
   `./target/release/herdr-music` as a pane/action command there; see the
   port subsection for the fallback reasoning.
 - Post-spec upstream change (verified live 2026-11): Spotify rejects
-  third-party Web API access tokens at the Connect/login5 step with
-  `INVALID_CREDENTIALS` even when they carry `streaming` (librespot
-  #1737). The engine therefore signs in itself via librespot's
-  `--enable-oauth`/`--system-cache` flow (a one-time browser visit to
-  `http://127.0.0.1:8877/`, credentials cached in `engine-cache/`), and
-  the plugin token is used for the Web API only — the `streaming` scope
-  gate was dropped from `start_local`. Readiness timing: 20 s with cached
-  credentials, 180 s while an OAuth visit is pending.
+  third-party Web API tokens at Connect/login5 with `INVALID_CREDENTIALS`,
+  and even librespot's own `--enable-oauth` credentials register the
+  device but get no audio keys (tracks fail to decrypt and skip). Only
+  zeroconf-handshake credentials work, so the engine runs discovery
+  (with-libmdns build) + `--system-cache`: the user picks the device in
+  their Spotify app once, credentials persist in `engine-cache/`, later
+  starts reuse them. The plugin token is Web-API-only — no token or
+  `streaming` gate in `start_local`. Readiness: 20 s with cached
+  credentials, 180 s while the first-time app pick is pending, timeout
+  message points at the app pick.
 - Manual verification checklist: clean macOS, Linux, and Windows installs
   via `herdr plugin install`; `spotify-login` action opens the browser and
   completes; `open` action opens the pane; `d` shows "Herdr Music (this
