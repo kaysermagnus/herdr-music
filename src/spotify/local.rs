@@ -11,12 +11,6 @@ const ENGINE_ENV: &str = "HERDR_MUSIC_ENGINE";
 /// Port for the engine's OAuth redirect catcher (127.0.0.1 only).
 pub const OAUTH_PORT: u16 = 8877;
 
-/// The engine's own sign-in page: opening it once mints credentials that
-/// Connect accepts (Web API tokens are rejected at login5 since 2026-08).
-pub fn oauth_url() -> String {
-    format!("http://127.0.0.1:{OAUTH_PORT}/")
-}
-
 /// The credentials file the engine's OAuth writes into `cache_dir`.
 pub fn credentials_path(cache_dir: &std::path::Path) -> PathBuf {
     cache_dir.join("credentials.json")

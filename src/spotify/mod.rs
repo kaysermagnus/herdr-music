@@ -29,6 +29,8 @@ enum Phase {
         /// True while waiting for the user to complete the engine's
         /// browser sign-in (extends the readiness deadline).
         oauth_pending: bool,
+        /// Set once we've opened the scraped sign-in URL in a browser.
+        oauth_opened: bool,
     },
     Ready {
         engine: crate::engine::Engine,
@@ -290,20 +292,12 @@ impl MusicProvider for SpotifyProvider {
         };
         match crate::engine::Engine::spawn(spawn) {
             Ok(engine) => {
-                if inv.oauth_pending {
-                    // No credentials yet: send the user to the engine's
-                    // sign-in page; it mints credentials Connect accepts.
-                    if let Some((prog, args)) =
-                        auth::browser_launch_command(std::env::consts::OS, &local::oauth_url())
-                    {
-                        let _ = std::process::Command::new(prog).args(args).spawn();
-                    }
-                }
                 *phase = Phase::Starting {
                     engine,
                     name: name.to_string(),
                     at: Instant::now(),
                     oauth_pending: inv.oauth_pending,
+                    oauth_opened: false,
                 };
                 Ok(())
             }
@@ -333,7 +327,20 @@ impl MusicProvider for SpotifyProvider {
                 name,
                 at,
                 oauth_pending,
+                oauth_opened,
             } => {
+                if *oauth_pending && !*oauth_opened {
+                    if let Some(url) = engine.oauth_url() {
+                        // Credentials absent: the engine printed its
+                        // sign-in URL — send the user through it once.
+                        if let Some((prog, args)) =
+                            auth::browser_launch_command(std::env::consts::OS, &url)
+                        {
+                            let _ = std::process::Command::new(prog).args(args).spawn();
+                        }
+                        *oauth_opened = true;
+                    }
+                }
                 let timeout = if *oauth_pending {
                     OAUTH_TIMEOUT
                 } else {

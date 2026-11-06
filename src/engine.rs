@@ -5,7 +5,7 @@
 //! child on drop. Uses `std::process` plus OS command-line tools — no new
 //! crate dependencies.
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -34,6 +34,9 @@ pub struct Engine {
     child: Child,
     sink: Option<Child>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
+    /// "Browse to: <url>" scraped from the engine's output — librespot's
+    /// `--enable-oauth` prints its sign-in URL this way.
+    oauth_url: Arc<Mutex<Option<String>>>,
     pidfile: PathBuf,
 }
 
@@ -53,15 +56,10 @@ impl Engine {
             ),
             None => None,
         };
-        let stdout = match &mut sink {
-            // PCM flows straight into the player — no copying thread.
-            Some(s) => Stdio::from(s.stdin.take().expect("sink stdin piped")),
-            None => Stdio::null(),
-        };
         let mut child = Command::new(opts.engine.program)
             .args(opts.engine.args)
             .envs(opts.engine.envs.iter().cloned())
-            .stdout(stdout)
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
         let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_RING)));
@@ -77,11 +75,44 @@ impl Engine {
                 }
             });
         }
+        // stdout pump: bytes flow to the sink's stdin when there is one;
+        // either way, scan for the engine's "Browse to:" OAuth URL.
+        let oauth_url = Arc::new(Mutex::new(None));
+        if let Some(mut out) = child.stdout.take() {
+            let mut sink_in = sink.as_mut().and_then(|s| s.stdin.take());
+            let url_slot = oauth_url.clone();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 8192];
+                let mut scan = Vec::new();
+                loop {
+                    match out.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            if let Some(stdin) = sink_in.as_mut() {
+                                if stdin.write_all(&buf[..n]).is_err() {
+                                    sink_in = None;
+                                }
+                            }
+                            if url_slot.lock().unwrap().is_none() {
+                                scan.extend_from_slice(&buf[..n]);
+                                if scan.len() > 65536 {
+                                    scan.drain(..scan.len() / 2);
+                                }
+                                if let Some(url) = extract_oauth_url(&scan) {
+                                    *url_slot.lock().unwrap() = Some(url);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
         write_pidfile(opts.pidfile, std::process::id(), child.id());
         Ok(Self {
             child,
             sink,
             stderr_tail,
+            oauth_url,
             pidfile: opts.pidfile.to_path_buf(),
         })
     }
@@ -94,6 +125,11 @@ impl Engine {
     /// True when the engine process has exited (crash or clean exit).
     pub fn exited(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(Some(_)) | Err(_))
+    }
+
+    /// The engine's "Browse to:" OAuth URL, once printed.
+    pub fn oauth_url(&self) -> Option<String> {
+        self.oauth_url.lock().unwrap().clone()
     }
 
     /// The engine's last stderr line — usually its error message.
@@ -274,6 +310,17 @@ fn reap_stale(pidfile: &Path, engine_name: String) {
         force_kill(engine);
     }
     let _ = std::fs::remove_file(pidfile);
+}
+
+/// Pull `Browse to: <url>` out of a byte stream chunk.
+fn extract_oauth_url(buf: &[u8]) -> Option<String> {
+    let pos = buf.windows(11).position(|w| w == b"Browse to: ")? + 11;
+    let end = buf[pos..]
+        .iter()
+        .position(|b| *b == b'\n' || *b == b'\r')
+        .map(|e| pos + e)?;
+    let url = String::from_utf8_lossy(&buf[pos..end]).trim().to_string();
+    url.starts_with("http").then_some(url)
 }
 
 /// `ps comm`/`tasklist` truncate long names, so accept a prefix match in
