@@ -75,18 +75,20 @@ fn read_request(stream: &mut std::net::TcpStream) -> String {
         .set_read_timeout(Some(Duration::from_millis(100)))
         .unwrap();
     loop {
+        if Instant::now() > deadline {
+            break;
+        }
         let mut chunk = [0u8; 4096];
         match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
             Ok(n) => {
                 buf.extend_from_slice(&chunk[..n]);
                 if request_complete(&buf) {
                     break;
                 }
             }
-        }
-        if Instant::now() > deadline {
-            break;
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(_) => break,
         }
     }
     String::from_utf8_lossy(&buf).to_string()

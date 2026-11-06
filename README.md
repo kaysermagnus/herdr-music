@@ -54,6 +54,8 @@ The `[[build]]` step in `herdr-plugin.toml` runs `cargo build --release`.
 ```sh
 herdr plugin pane open --plugin cesar.music --entrypoint player  # split pane
 herdr plugin action invoke cesar.music.spotify-login             # connect account
+# If the browser doesn't open, find the authorize URL in:
+#   herdr plugin log list --plugin cesar.music
 herdr plugin action invoke cesar.music.play-pause                # headless control
 ```
 

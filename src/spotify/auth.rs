@@ -94,6 +94,9 @@ fn token_request(
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().unwrap_or_default();
+        if body.contains("invalid_grant") {
+            return Err(ProviderError::NotAuthenticated);
+        }
         return Err(ProviderError::Api(format!(
             "token request failed ({status}): {}",
             body.trim()
@@ -194,7 +197,7 @@ pub fn login(
 ) -> Result<StoredTokens, ProviderError> {
     let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| {
         ProviderError::Api(format!(
-            "cannot listen on 127.0.0.1:{port} — is the port busy? {e}"
+            "cannot listen on 127.0.0.1:{port} — port busy? pick another: herdr-music auth login <port>. {e}"
         ))
     })?;
     let redirect = redirect_uri(port);
@@ -217,11 +220,23 @@ pub fn login(
     let (mut stream, _) = listener
         .accept()
         .map_err(|e| ProviderError::Api(format!("accept failed: {e}")))?;
-    let mut buf = [0u8; 8192];
-    let n = stream
-        .read(&mut buf)
-        .map_err(|e| ProviderError::Api(format!("read failed: {e}")))?;
-    let request = String::from_utf8_lossy(&buf[..n]);
+    // Read until the request line arrives — only the first line is parsed,
+    // but a single read() is not guaranteed to return it whole.
+    let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
+    loop {
+        let n = stream
+            .read(&mut chunk)
+            .map_err(|e| ProviderError::Api(format!("read failed: {e}")))?;
+        if n == 0 || buf.len() >= 8192 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.windows(2).any(|w| w == b"\r\n") {
+            break;
+        }
+    }
+    let request = String::from_utf8_lossy(&buf);
     let path = request
         .lines()
         .next()

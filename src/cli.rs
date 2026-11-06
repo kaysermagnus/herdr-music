@@ -12,13 +12,13 @@ CTL COMMANDS:
     play-pause play pause stop next previous forward rewind
 
 AUTH COMMANDS:
-    login      Connect Spotify via OAuth (browser)
-    status     Show connection state
-    logout     Remove stored tokens";
+    login [port]   Connect Spotify via OAuth (browser)
+    status         Show connection state
+    logout         Remove stored tokens";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum AuthCmd {
-    Login,
+    Login(Option<u16>),
     Status,
     Logout,
 }
@@ -45,9 +45,16 @@ pub fn parse(args: &[String]) -> Result<Requested, String> {
         [cmd, sub] => match (cmd.as_str(), sub.as_str()) {
             ("ctl", name) if ctl_command(name).is_some() => Ok(Requested::Ctl(name.to_string())),
             ("ctl", _) => err(),
-            ("auth", "login") => Ok(Requested::Auth(AuthCmd::Login)),
+            ("auth", "login") => Ok(Requested::Auth(AuthCmd::Login(None))),
             ("auth", "status") => Ok(Requested::Auth(AuthCmd::Status)),
             ("auth", "logout") => Ok(Requested::Auth(AuthCmd::Logout)),
+            _ => err(),
+        },
+        [cmd, sub, arg] => match (cmd.as_str(), sub.as_str()) {
+            ("auth", "login") => arg
+                .parse::<u16>()
+                .map(|p| Requested::Auth(AuthCmd::Login(Some(p))))
+                .map_err(|_| format!("invalid port `{arg}`\n\n{USAGE}")),
             _ => err(),
         },
         _ => err(),
@@ -98,8 +105,13 @@ mod tests {
     fn auth_subcommands() {
         assert_eq!(
             parse(&args(&["auth", "login"])),
-            Ok(Requested::Auth(AuthCmd::Login))
+            Ok(Requested::Auth(AuthCmd::Login(None)))
         );
+        assert_eq!(
+            parse(&args(&["auth", "login", "9999"])),
+            Ok(Requested::Auth(AuthCmd::Login(Some(9999))))
+        );
+        assert!(parse(&args(&["auth", "login", "abc"])).is_err());
         assert!(parse(&args(&["auth", "bogus"])).is_err());
     }
 

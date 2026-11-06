@@ -36,7 +36,7 @@ fn dispatch(req: Requested) -> Result<()> {
         Requested::Tui => tui::run(Box::new(spotify::provider_from_config(&AppConfig::load())?)),
         Requested::Status => status(),
         Requested::Ctl(name) => ctl(&name),
-        Requested::Auth(AuthCmd::Login) => auth_login(),
+        Requested::Auth(AuthCmd::Login(port)) => auth_login(port),
         Requested::Auth(AuthCmd::Status) => {
             match spotify::connection_status(&config::state_dir())? {
                 true => println!("spotify: connected"),
@@ -88,7 +88,7 @@ fn ctl(name: &str) -> Result<()> {
     }
 }
 
-fn auth_login() -> Result<()> {
+fn auth_login(port: Option<u16>) -> Result<()> {
     let client_id = AppConfig::load().spotify_client_id.ok_or_else(|| {
         anyhow!(
             "spotify client id not configured — set HERDR_MUSIC_SPOTIFY_CLIENT_ID \
@@ -99,7 +99,7 @@ fn auth_login() -> Result<()> {
     spotify::login(
         &client_id,
         &config::state_dir(),
-        spotify::auth::DEFAULT_REDIRECT_PORT,
+        port.unwrap_or(spotify::auth::DEFAULT_REDIRECT_PORT),
     )?;
     println!("spotify: connected");
     Ok(())

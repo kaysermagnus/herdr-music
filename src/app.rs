@@ -1,5 +1,4 @@
 use crate::provider::{MusicProvider, Playback, ProviderError, SEEK_STEP_SECS};
-use std::time::Instant;
 
 /// Every transport/UI intent, produced by key events or `ctl` argv.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,7 +27,7 @@ pub struct Snapshot {
 /// Used directly by `ctl` (single-threaded) and by the TUI worker thread.
 pub struct Controller {
     pub provider_name: &'static str,
-    playback: Option<(Playback, Instant)>,
+    playback: Option<Playback>,
     status: Option<String>,
 }
 
@@ -72,23 +71,16 @@ impl Controller {
     pub fn refresh(&mut self, provider: &dyn MusicProvider) {
         match provider.playback() {
             Ok(pb) => {
-                self.playback = pb.map(|p| (p, Instant::now()));
+                self.playback = pb;
                 self.status = None;
             }
             Err(e) => self.status = Some(e.to_string()),
         }
     }
 
-    /// Progress interpolated to `now` from the last snapshot.
-    pub fn progress(&self, now: Instant) -> Option<std::time::Duration> {
-        self.playback
-            .as_ref()
-            .map(|(pb, at)| pb.progress_at(now.saturating_duration_since(*at)))
-    }
-
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
-            playback: self.playback.as_ref().map(|(pb, _)| pb.clone()),
+            playback: self.playback.clone(),
             status: self.status.clone(),
         }
     }

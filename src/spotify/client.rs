@@ -24,8 +24,14 @@ pub struct TokenResponse {
     pub access_token: String,
     #[serde(default)]
     pub refresh_token: Option<String>,
-    #[serde(default)]
+    /// Spotify always sends this; default to an hour so a missing field
+    /// doesn't make the token instantly stale.
+    #[serde(default = "default_expires_in")]
     pub expires_in: u64,
+}
+
+fn default_expires_in() -> u64 {
+    3600
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,6 +139,12 @@ mod tests {
         let r: PlayerResponse =
             serde_json::from_str(r#"{"is_playing": false, "item": null}"#).unwrap();
         assert!(playback_from(r).is_none());
+    }
+
+    #[test]
+    fn missing_expires_in_defaults_to_one_hour() {
+        let r: TokenResponse = serde_json::from_str(r#"{"access_token":"x"}"#).unwrap();
+        assert_eq!(r.expires_in, 3600);
     }
 
     #[test]
