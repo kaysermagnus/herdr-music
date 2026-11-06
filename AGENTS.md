@@ -37,8 +37,8 @@ the model for that step: `spec-writer` (Fable), `coder` (SWE-2), `reviewer`
 - Spotify answers `411 Length Required` to PUT/POST without
   `Content-Length: 0`. A stub server accepts either, so keep the test that
   asserts the header.
-- To run the binary live outside Herdr, set `HERDR_PLUGIN_CONFIG_DIR=~/.config/herdr/plugins/config/cesar.music`
-  and `HERDR_PLUGIN_STATE_DIR=~/.local/state/herdr/plugins/cesar.music`.
+- To run the binary live outside Herdr, set `HERDR_PLUGIN_CONFIG_DIR=~/.config/herdr/plugins/config/herdr-music`
+  and `HERDR_PLUGIN_STATE_DIR=~/.local/state/herdr/plugins/herdr-music`.
 - To remove temporary edits, back the file up first and restore from that
   backup; `git checkout -- <file>` also discards uncommitted work in it.
 - Commit messages containing backticks: pass them via

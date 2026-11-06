@@ -103,7 +103,7 @@ URL (internal, stub-server tests only).
 
 ## 11. Manifest and Herdr integration
 
-- [ ] `herdr-plugin.toml` final: id `cesar.music`, `platforms`
+- [ ] `herdr-plugin.toml` final: id `herdr-music`, `platforms`
       `["linux","macos"]`, `[[build]] cargo build --release`,
       `[[panes]] player` (split), `[[actions]]` open/play-pause/next/
       previous/forward/rewind/stop/spotify-login

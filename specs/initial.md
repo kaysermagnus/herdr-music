@@ -148,7 +148,7 @@ Error handling:
 - One Cargo package, `herdr-music`, producing a single binary of the same
   name. The repository root doubles as the plugin directory and contains
   `herdr-plugin.toml`.
-- Plugin id: `cesar.music` (dots allowed in plugin ids). `name = "Music"`,
+- Plugin id: `herdr-music`, matching the repo and binary. `name = "Music"`,
   `min_herdr_version = "0.7.0"`, `platforms = ["linux", "macos"]`.
 - `[[build]]` command: `cargo build --release` so `herdr plugin install`
   from GitHub compiles automatically. `plugin link` uses the working tree's
@@ -300,4 +300,4 @@ or implementation structure.
   `HERDR_PLUGIN_CONFIG_DIR`, `HERDR_BIN_PATH`; actions bindable via
   `[[keys.command]]` with `type = "plugin_action"`.
 - Development loop: `cargo build --release` → `herdr plugin link <dir>` →
-  `herdr plugin pane open --plugin cesar.music --entrypoint player`.
+  `herdr plugin pane open --plugin herdr-music --entrypoint player`.

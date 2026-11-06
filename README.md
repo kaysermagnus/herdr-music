@@ -26,7 +26,7 @@ export HERDR_MUSIC_SPOTIFY_CLIENT_ID=your_client_id
 ```
 
 or in `config.toml` inside the plugin config dir
-(`herdr plugin config-dir cesar.music` prints it):
+(`herdr plugin config-dir herdr-music` prints it):
 
 ```toml
 spotify_client_id = "your_client_id"
@@ -52,11 +52,11 @@ The `[[build]]` step in `herdr-plugin.toml` runs `cargo build --release`.
 ## Use
 
 ```sh
-herdr plugin pane open --plugin cesar.music --entrypoint player  # split pane
-herdr plugin action invoke cesar.music.spotify-login             # connect account
+herdr plugin pane open --plugin herdr-music --entrypoint player  # split pane
+herdr plugin action invoke herdr-music.spotify-login             # connect account
 # If the browser doesn't open, find the authorize URL in:
-#   herdr plugin log list --plugin cesar.music
-herdr plugin action invoke cesar.music.play-pause                # headless control
+#   herdr plugin log list --plugin herdr-music
+herdr plugin action invoke herdr-music.play-pause                # headless control
 ```
 
 Or run the binary directly (`HERDR_PLUGIN_*` dirs fall back to platform
@@ -106,7 +106,7 @@ Add to your Herdr `config.toml`:
 [[keys.command]]
 key = "prefix+m"
 type = "plugin_action"
-command = "cesar.music.play-pause"
+command = "herdr-music.play-pause"
 description = "music play/pause"
 ```
 
