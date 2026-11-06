@@ -177,6 +177,7 @@ fn fake_invocation(dir: PathBuf) -> Invocation {
         args: vec!["fake_engine".into(), "--exact".into(), "--nocapture".into()],
         sink: None,
         pidfile: dir.join("engine.pid"),
+        oauth_pending: false,
     }
 }
 
@@ -194,7 +195,7 @@ fn provider_with_engine(stub: &Stub, tag: &str) -> SpotifyProvider {
         },
         dir,
     )
-    .with_engine_invocation(move |_, _| Ok(fake_invocation(inv_dir.clone())))
+    .with_engine_invocation(move |_| Ok(fake_invocation(inv_dir.clone())))
 }
 
 const DEVICES_EMPTY: &str = r#"{"devices": []}"#;
@@ -352,14 +353,26 @@ fn transfer_404_is_no_active_device() {
 }
 
 #[test]
-fn start_local_is_disabled_until_tokens_have_the_streaming_scope() {
+fn start_local_is_disabled_when_invocation_fails() {
     let stub = Stub::serve(vec![]);
-    let p = provider(&stub, "noscope", Some(fresh_tokens())); // no scopes
+    let dir = state_dir("noinv");
+    scoped_tokens()
+        .save(&StoredTokens::token_path(&dir))
+        .unwrap();
+    let p = SpotifyProvider::with_endpoints(
+        "test-client",
+        Endpoints {
+            api: format!("http://{}", stub.addr),
+            accounts: format!("http://{}", stub.addr),
+        },
+        dir,
+    )
+    .with_engine_invocation(|_| Err("local engine not installed".to_string()));
     p.start_local("Herdr Music").unwrap();
     match p.local_status() {
         LocalStatus::Disabled { reason, silent } => {
-            assert!(reason.contains("auth login"), "{reason}");
-            assert!(silent, "scope nudge must stay off the status line");
+            assert!(reason.contains("not installed"), "{reason}");
+            assert!(!silent, "a missing engine belongs on the status line");
         }
         other => panic!("expected Disabled, got {other:?}"),
     }

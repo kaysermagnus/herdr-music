@@ -13,8 +13,10 @@ use std::time::{Duration, Instant};
 use tokens::{StoredTokens, TokenCache};
 
 /// How long the local engine may take to register as a Connect device
-/// before `local_status` gives up and reports a failure.
+/// before `local_status` gives up and reports a failure. The OAuth wait
+/// is longer — a human has to click through a browser flow.
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
+const OAUTH_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Engine lifecycle inside the adapter. `Starting`/`Ready` hold the
 /// engine so dropping the provider (worker exit) kills the child.
@@ -24,6 +26,9 @@ enum Phase {
         engine: crate::engine::Engine,
         name: String,
         at: Instant,
+        /// True while waiting for the user to complete the engine's
+        /// browser sign-in (extends the readiness deadline).
+        oauth_pending: bool,
     },
     Ready {
         engine: crate::engine::Engine,
@@ -35,7 +40,7 @@ enum Phase {
     },
 }
 
-type EngineInvocation = Box<dyn Fn(&str, &str) -> Result<local::Invocation, String> + Send>;
+type EngineInvocation = Box<dyn Fn(&str) -> Result<local::Invocation, String> + Send>;
 
 /// Spotify adapter for the `MusicProvider` seam. Blocking HTTP, token
 /// refresh handled internally behind `&self` via a Mutex'd token cache.
@@ -71,7 +76,7 @@ impl SpotifyProvider {
             tokens: Mutex::new(TokenCache::Unloaded),
             token_path: StoredTokens::token_path(&state_dir),
             local: Mutex::new(Phase::NotStarted),
-            engine_invocation: Box::new(move |token, name| local::invocation(token, name, &dir)),
+            engine_invocation: Box::new(move |name| local::invocation(name, &dir)),
         }
     }
 
@@ -79,7 +84,7 @@ impl SpotifyProvider {
     /// pidfile) without touching the real librespot.
     pub fn with_engine_invocation(
         mut self,
-        f: impl Fn(&str, &str) -> Result<local::Invocation, String> + Send + 'static,
+        f: impl Fn(&str) -> Result<local::Invocation, String> + Send + 'static,
     ) -> Self {
         self.engine_invocation = Box::new(f);
         self
@@ -114,18 +119,6 @@ impl SpotifyProvider {
     /// Force a refresh after a 401 even when the token looks unexpired.
     fn force_refresh(&self) -> Result<String, ProviderError> {
         self.refresh_locked(&mut self.tokens.lock().unwrap())
-    }
-
-    /// The stored tokens, or None — for scope checks that don't refresh.
-    fn stored(&self) -> Result<Option<StoredTokens>, ProviderError> {
-        let mut cache = self.tokens.lock().unwrap();
-        if matches!(*cache, TokenCache::Unloaded) {
-            *cache = TokenCache::Loaded(StoredTokens::load(&self.token_path)?);
-        }
-        match &*cache {
-            TokenCache::Loaded(t) => Ok(t.clone()),
-            _ => unreachable!("cache was just loaded"),
-        }
     }
 
     /// Send the request `build` produces; on 401 refresh once and retry.
@@ -272,19 +265,7 @@ impl MusicProvider for SpotifyProvider {
         if matches!(*phase, Phase::Starting { .. } | Phase::Ready { .. }) {
             return Ok(()); // already running or registering
         }
-        let granted = self
-            .stored()?
-            .map(|t| t.has_scope("streaming"))
-            .unwrap_or(false);
-        if !granted {
-            *phase = Phase::Disabled {
-                reason: "re-run `herdr-music auth login` to enable local playback".into(),
-                silent: true,
-            };
-            return Ok(());
-        }
-        let token = self.access_token()?;
-        let inv = match (self.engine_invocation)(&token, name) {
+        let inv = match (self.engine_invocation)(name) {
             Ok(inv) => inv,
             Err(reason) => {
                 *phase = Phase::Disabled {
@@ -309,10 +290,20 @@ impl MusicProvider for SpotifyProvider {
         };
         match crate::engine::Engine::spawn(spawn) {
             Ok(engine) => {
+                if inv.oauth_pending {
+                    // No credentials yet: send the user to the engine's
+                    // sign-in page; it mints credentials Connect accepts.
+                    if let Some((prog, args)) =
+                        auth::browser_launch_command(std::env::consts::OS, &local::oauth_url())
+                    {
+                        let _ = std::process::Command::new(prog).args(args).spawn();
+                    }
+                }
                 *phase = Phase::Starting {
                     engine,
                     name: name.to_string(),
                     at: Instant::now(),
+                    oauth_pending: inv.oauth_pending,
                 };
                 Ok(())
             }
@@ -337,16 +328,26 @@ impl MusicProvider for SpotifyProvider {
         }
         let mut phase = self.local.lock().unwrap();
         let step = match &mut *phase {
-            Phase::Starting { engine, name, at } => {
+            Phase::Starting {
+                engine,
+                name,
+                at,
+                oauth_pending,
+            } => {
+                let timeout = if *oauth_pending {
+                    OAUTH_TIMEOUT
+                } else {
+                    READY_TIMEOUT
+                };
                 if engine.exited() {
                     let line = engine
                         .last_error_line()
                         .unwrap_or_else(|| "engine exited".into());
                     Step::Fail(format!("local engine exited: {line}"))
-                } else if at.elapsed() > READY_TIMEOUT {
+                } else if at.elapsed() > timeout {
                     Step::Fail(format!(
                         "local engine did not register within {}s",
-                        READY_TIMEOUT.as_secs()
+                        timeout.as_secs()
                     ))
                 } else {
                     match self.devices() {

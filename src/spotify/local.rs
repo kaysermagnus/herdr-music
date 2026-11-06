@@ -8,20 +8,36 @@ use std::path::{Path, PathBuf};
 pub const ENGINE_VERSION: &str = "0.8.0";
 const ENGINE_ENV: &str = "HERDR_MUSIC_ENGINE";
 
-/// librespot argv for `os` (a `std::env::consts::OS` value). The token
-/// must carry the `streaming` scope. Discovery isn't built into our
-/// binary, so no flag disables it. Linux writes PCM to stdout for the
-/// sink to consume; macOS/Windows play through rodio (CoreAudio/WASAPI).
-pub fn engine_argv(os: &str, token: &str, name: &str) -> Vec<String> {
+/// Port for the engine's OAuth redirect catcher (127.0.0.1 only).
+pub const OAUTH_PORT: u16 = 8877;
+
+/// The engine's own sign-in page: opening it once mints credentials that
+/// Connect accepts (Web API tokens are rejected at login5 since 2026-08).
+pub fn oauth_url() -> String {
+    format!("http://127.0.0.1:{OAUTH_PORT}/")
+}
+
+/// The credentials file the engine's OAuth writes into `cache_dir`.
+pub fn credentials_path(cache_dir: &std::path::Path) -> PathBuf {
+    cache_dir.join("credentials.json")
+}
+
+/// librespot argv for `os` (a `std::env::consts::OS` value). Discovery
+/// isn't built into our binary, so no flag disables it. Linux writes PCM
+/// to stdout for the sink to consume; macOS/Windows play through rodio
+/// (CoreAudio/WASAPI).
+pub fn engine_argv(os: &str, name: &str, cache_dir: &std::path::Path) -> Vec<String> {
     let mut args = vec![
         "--name".to_string(),
         name.to_string(),
         "--device-type".to_string(),
         "computer".to_string(),
-        "--access-token".to_string(),
-        token.to_string(),
+        "--enable-oauth".to_string(),
+        "--oauth-port".to_string(),
+        OAUTH_PORT.to_string(),
+        "--system-cache".to_string(),
+        cache_dir.to_string_lossy().into_owned(),
         "--disable-audio-cache".to_string(),
-        "--disable-credential-cache".to_string(),
     ];
     if os == "linux" {
         args.extend([
@@ -54,18 +70,20 @@ pub fn engine_path() -> Option<PathBuf> {
 }
 
 /// A fully-resolved engine spawn: program, argv, optional Linux audio
-/// sink, and the pidfile location.
+/// sink, the pidfile location, and whether a browser visit is needed to
+/// mint engine credentials (`oauth_pending`).
 pub struct Invocation {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub sink: Option<(PathBuf, Vec<String>)>,
     pub pidfile: PathBuf,
+    pub oauth_pending: bool,
 }
 
 /// Build the invocation for a real start. `Err(reason)` is a *disabled*
 /// reason — the adapter turns it into `LocalStatus::Disabled`, not an
 /// error.
-pub fn invocation(token: &str, name: &str, state_dir: &Path) -> Result<Invocation, String> {
+pub fn invocation(name: &str, state_dir: &Path) -> Result<Invocation, String> {
     let program = engine_path()
         .filter(|p| p.is_file())
         .ok_or("local engine not installed — re-run `herdr plugin install`".to_string())?;
@@ -78,6 +96,7 @@ pub fn invocation(token: &str, name: &str, state_dir: &Path) -> Result<Invocatio
     {
         check_version(&program)?;
     }
+    let cache_dir = state_dir.join("engine-cache");
     let sink = if std::env::consts::OS == "linux" {
         Some(
             pick_sink(on_path)
@@ -88,9 +107,10 @@ pub fn invocation(token: &str, name: &str, state_dir: &Path) -> Result<Invocatio
     };
     Ok(Invocation {
         program,
-        args: engine_argv(std::env::consts::OS, token, name),
+        args: engine_argv(std::env::consts::OS, name, &cache_dir),
         sink,
         pidfile: state_dir.join("engine.pid"),
+        oauth_pending: !credentials_path(&cache_dir).exists(),
     })
 }
 
@@ -163,20 +183,23 @@ fn is_executable(path: &std::path::Path) -> bool {
 mod tests {
     use super::*;
 
-    fn argv<'a>(os: &str) -> Vec<String> {
-        engine_argv(os, "tok", "Herdr Music")
+    fn argv(os: &str) -> Vec<String> {
+        engine_argv(os, "Herdr Music", std::path::Path::new("/cache"))
     }
 
     #[test]
-    fn argv_carries_name_token_and_no_caches() {
+    fn argv_carries_name_oauth_and_cache() {
         for os in ["linux", "macos", "windows"] {
             let a = argv(os);
             let pos = |flag: &str| a.iter().position(|x| x == flag).unwrap();
             assert_eq!(a[pos("--name") + 1], "Herdr Music");
-            assert_eq!(a[pos("--access-token") + 1], "tok");
             assert_eq!(a[pos("--device-type") + 1], "computer");
+            assert_eq!(a[pos("--oauth-port") + 1], OAUTH_PORT.to_string());
+            assert_eq!(a[pos("--system-cache") + 1], "/cache");
+            assert!(a.contains(&"--enable-oauth".to_string()));
             assert!(a.contains(&"--disable-audio-cache".to_string()));
-            assert!(a.contains(&"--disable-credential-cache".to_string()));
+            // Credentials must be cached — the engine's OAuth mints them.
+            assert!(!a.contains(&"--disable-credential-cache".to_string()));
         }
     }
 
