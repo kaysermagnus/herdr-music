@@ -1,5 +1,6 @@
-use herdr_music::provider::{MusicProvider, ProviderError};
+use herdr_music::provider::{LocalStatus, MusicProvider, ProviderError};
 use herdr_music::spotify::client::Endpoints;
+use herdr_music::spotify::local::Invocation;
 use herdr_music::spotify::tokens::StoredTokens;
 use herdr_music::spotify::SpotifyProvider;
 use std::io::{Read, Write};
@@ -145,6 +146,62 @@ fn fresh_tokens() -> StoredTokens {
     StoredTokens::new("access-1".into(), "refresh-1".into(), 3600)
 }
 
+/// Tokens carrying the `streaming` scope, as post-feature logins save.
+fn scoped_tokens() -> StoredTokens {
+    let mut t = fresh_tokens();
+    t.scopes = vec![
+        "user-read-playback-state".into(),
+        "user-modify-playback-state".into(),
+        "user-read-currently-playing".into(),
+        "streaming".into(),
+    ];
+    t
+}
+
+/// Same self-reinvoke trick as tests/engine.rs: the spawned copy of this
+/// test binary parks as the fake engine when the env var is set.
+#[test]
+fn fake_engine() {
+    if std::env::var("HERDR_MUSIC_FAKE_ENGINE").is_err() {
+        return;
+    }
+    loop {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// An invocation that spawns this test binary as a parked fake engine.
+fn fake_invocation(dir: PathBuf) -> Invocation {
+    Invocation {
+        program: std::env::current_exe().unwrap(),
+        args: vec!["fake_engine".into(), "--exact".into(), "--nocapture".into()],
+        sink: None,
+        pidfile: dir.join("engine.pid"),
+    }
+}
+
+fn provider_with_engine(stub: &Stub, tag: &str) -> SpotifyProvider {
+    let dir = state_dir(tag);
+    scoped_tokens()
+        .save(&StoredTokens::token_path(&dir))
+        .unwrap();
+    let inv_dir = dir.clone();
+    SpotifyProvider::with_endpoints(
+        "test-client",
+        Endpoints {
+            api: format!("http://{}", stub.addr),
+            accounts: format!("http://{}", stub.addr),
+        },
+        dir,
+    )
+    .with_engine_invocation(move |_, _| Ok(fake_invocation(inv_dir.clone())))
+}
+
+const DEVICES_EMPTY: &str = r#"{"devices": []}"#;
+const DEVICES_LOCAL: &str = r#"{"devices": [
+    {"id": "local-1", "name": "Herdr Music", "is_active": false}
+]}"#;
+
 #[test]
 fn playback_maps_player_json() {
     let stub = Stub::serve(vec![(200, PLAYER_JSON)]);
@@ -248,4 +305,77 @@ fn missing_tokens_is_not_authenticated_without_http() {
     let p = provider(&stub, "noauth", None);
     assert_eq!(p.play().unwrap_err(), ProviderError::NotAuthenticated);
     assert!(stub.requests().is_empty());
+}
+
+#[test]
+fn devices_maps_the_device_list() {
+    let stub = Stub::serve(vec![(
+        200,
+        r#"{"devices": [
+        {"id": "d1", "name": "Herdr Music", "is_active": false},
+        {"id": "d2", "name": "Kitchen", "is_active": true}
+    ]}"#,
+    )]);
+    let p = provider(&stub, "devs", Some(fresh_tokens()));
+    let devices = p.devices().unwrap();
+    assert_eq!(devices.len(), 2);
+    assert_eq!(devices[0].id, "d1");
+    assert_eq!(devices[0].name, "Herdr Music");
+    assert!(!devices[0].is_active);
+    assert!(devices[1].is_active);
+    assert!(stub.requests()[0].starts_with("GET /me/player/devices"));
+}
+
+#[test]
+fn transfer_puts_me_player_with_a_json_body() {
+    let stub = Stub::serve(vec![(204, "")]);
+    let p = provider(&stub, "xfer", Some(fresh_tokens()));
+    p.transfer("d1").unwrap();
+    let req = &stub.requests()[0];
+    assert!(req.starts_with("PUT /me/player "), "{req}");
+    assert!(req.contains("content-length:"), "{req}");
+    // The JSON body must name the device and keep playback going — and
+    // must NOT be the Content-Length: 0 empty body the transport verbs use.
+    assert!(!req.contains("content-length: 0\r"), "{req}");
+    assert!(req.contains("\"device_ids\":[\"d1\"]"), "{req}");
+    assert!(req.contains("\"play\":true"), "{req}");
+}
+
+#[test]
+fn transfer_404_is_no_active_device() {
+    let stub = Stub::serve(vec![(404, "not found")]);
+    let p = provider(&stub, "xfer404", Some(fresh_tokens()));
+    assert_eq!(
+        p.transfer("gone").unwrap_err(),
+        ProviderError::NoActiveDevice
+    );
+}
+
+#[test]
+fn start_local_is_disabled_until_tokens_have_the_streaming_scope() {
+    let stub = Stub::serve(vec![]);
+    let p = provider(&stub, "noscope", Some(fresh_tokens())); // no scopes
+    p.start_local("Herdr Music").unwrap();
+    match p.local_status() {
+        LocalStatus::Disabled { reason, silent } => {
+            assert!(reason.contains("auth login"), "{reason}");
+            assert!(silent, "scope nudge must stay off the status line");
+        }
+        other => panic!("expected Disabled, got {other:?}"),
+    }
+}
+
+#[test]
+fn start_local_spawns_and_becomes_ready_via_the_device_list() {
+    let stub = Stub::serve(vec![
+        (200, DEVICES_EMPTY), // first tick: not registered yet
+        (200, DEVICES_LOCAL), // second tick: our device appeared
+    ]);
+    let p = provider_with_engine(&stub, "local");
+    p.start_local("Herdr Music").unwrap();
+    assert_eq!(p.local_status(), LocalStatus::Starting);
+    assert_eq!(p.local_status(), LocalStatus::Ready);
+    // Readiness is detected through the device list, not engine output.
+    let reqs = stub.requests();
+    assert!(reqs.iter().all(|r| r.starts_with("GET /me/player/devices")));
 }

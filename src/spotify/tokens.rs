@@ -10,6 +10,10 @@ pub struct StoredTokens {
     pub refresh_token: String,
     /// Unix seconds when the access token expires.
     pub expires_at: u64,
+    /// Scopes granted at login. Empty for tokens saved before scopes were
+    /// recorded, so pre-feature tokens can be told apart without a call.
+    #[serde(default)]
+    pub scopes: Vec<String>,
 }
 
 const REFRESH_MARGIN_SECS: u64 = 60;
@@ -25,7 +29,13 @@ impl StoredTokens {
             access_token,
             refresh_token,
             expires_at: now + expires_in,
+            scopes: Vec::new(),
         }
+    }
+
+    /// True when the granted scope list contains `scope`.
+    pub fn has_scope(&self, scope: &str) -> bool {
+        self.scopes.iter().any(|s| s == scope)
     }
 
     /// True when the token is expired or within the refresh margin.
@@ -99,6 +109,7 @@ mod tests {
             access_token: "a".into(),
             refresh_token: "r".into(),
             expires_at: 1_000,
+            scopes: Vec::new(),
         };
         assert!(!t.needs_refresh_at(900));
         assert!(t.needs_refresh_at(941));
@@ -141,5 +152,27 @@ mod tests {
     fn delete_missing_file_is_ok() {
         let path = std::env::temp_dir().join("hm-never-existed.json");
         assert!(StoredTokens::delete(&path).is_ok());
+    }
+
+    #[test]
+    fn scopes_round_trip_and_default_empty_for_old_files() {
+        let dir = std::env::temp_dir().join(format!("hm-tok3-{}", std::process::id()));
+        let path = dir.join("spotify-tokens.json");
+        let mut t = StoredTokens::new("access".into(), "refresh".into(), 3600);
+        t.scopes = vec!["streaming".into(), "user-read-playback-state".into()];
+        t.save(&path).unwrap();
+        let loaded = StoredTokens::load(&path).unwrap().unwrap();
+        assert!(loaded.has_scope("streaming"));
+        assert!(!loaded.has_scope("user-modify-playback-state"));
+
+        // A pre-feature file has no `scopes` field at all.
+        std::fs::write(
+            &path,
+            r#"{"access_token":"a","refresh_token":"r","expires_at":9999999999}"#,
+        )
+        .unwrap();
+        let old = StoredTokens::load(&path).unwrap().unwrap();
+        assert!(!old.has_scope("streaming"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

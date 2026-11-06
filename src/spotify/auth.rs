@@ -16,7 +16,7 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(180);
 const CALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 const SCOPES: &str =
-    "user-read-playback-state user-modify-playback-state user-read-currently-playing";
+    "user-read-playback-state user-modify-playback-state user-read-currently-playing streaming";
 
 /// Loopback redirect registered in the Spotify app settings.
 pub fn redirect_uri(port: u16) -> String {
@@ -129,11 +129,9 @@ pub fn exchange_code(
     let refresh_token = tr
         .refresh_token
         .ok_or_else(|| ProviderError::Api("no refresh token in response".into()))?;
-    Ok(StoredTokens::new(
-        tr.access_token,
-        refresh_token,
-        tr.expires_in,
-    ))
+    let mut tokens = StoredTokens::new(tr.access_token, refresh_token, tr.expires_in);
+    tokens.scopes = SCOPES.split(' ').map(String::from).collect();
+    Ok(tokens)
 }
 
 /// Mint a fresh access token. Spotify sometimes rotates the refresh token;
@@ -161,11 +159,10 @@ pub fn refresh(
     let refresh_token = tr
         .refresh_token
         .unwrap_or_else(|| tokens.refresh_token.clone());
-    Ok(StoredTokens::new(
-        tr.access_token,
-        refresh_token,
-        tr.expires_in,
-    ))
+    let mut fresh = StoredTokens::new(tr.access_token, refresh_token, tr.expires_in);
+    // Refresh inherits the original grant's scopes.
+    fresh.scopes = tokens.scopes.clone();
+    Ok(fresh)
 }
 
 fn callback_code(cb: &Callback, state: &str) -> Result<String, ProviderError> {
@@ -468,6 +465,7 @@ mod tests {
             "user-read-playback-state",
             "user-modify-playback-state",
             "user-read-currently-playing",
+            "streaming",
         ] {
             assert!(url.contains(scope));
         }

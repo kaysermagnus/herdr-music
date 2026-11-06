@@ -1,4 +1,4 @@
-use crate::provider::{Playback, ProviderError, Track};
+use crate::provider::{self, Playback, ProviderError, Track};
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -49,6 +49,37 @@ pub struct PlayerResponse {
 #[derive(Debug, Deserialize)]
 struct Device {
     name: String,
+}
+
+/// `GET /me/player/devices` payload: the Connect device list.
+#[derive(Debug, Deserialize)]
+pub struct DevicesResponse {
+    #[serde(default)]
+    devices: Vec<DeviceEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeviceEntry {
+    id: String,
+    name: String,
+    #[serde(default)]
+    is_active: bool,
+}
+
+pub fn devices_from(r: DevicesResponse) -> Vec<provider::Device> {
+    r.devices
+        .into_iter()
+        .map(|d| provider::Device {
+            id: d.id,
+            name: d.name,
+            is_active: d.is_active,
+        })
+        .collect()
+}
+
+/// Transfer body for `PUT /me/player`: move playback, keep it playing.
+pub fn transfer_body(device_id: &str) -> serde_json::Value {
+    serde_json::json!({"device_ids": [device_id], "play": true})
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,6 +176,44 @@ mod tests {
     fn missing_expires_in_defaults_to_one_hour() {
         let r: TokenResponse = serde_json::from_str(r#"{"access_token":"x"}"#).unwrap();
         assert_eq!(r.expires_in, 3600);
+    }
+
+    #[test]
+    fn devices_response_maps_to_devices() {
+        let r: DevicesResponse = serde_json::from_str(
+            r#"{"devices": [
+                {"id": "d1", "name": "Herdr Music", "is_active": true, "type": "Computer"},
+                {"id": "d2", "name": "Kitchen", "is_active": false}
+            ]}"#,
+        )
+        .unwrap();
+        let devices = devices_from(r);
+        assert_eq!(
+            devices,
+            vec![
+                provider::Device {
+                    id: "d1".into(),
+                    name: "Herdr Music".into(),
+                    is_active: true,
+                },
+                provider::Device {
+                    id: "d2".into(),
+                    name: "Kitchen".into(),
+                    is_active: false,
+                },
+            ]
+        );
+        // An empty/absent list is fine too.
+        let empty: DevicesResponse = serde_json::from_str("{}").unwrap();
+        assert!(devices_from(empty).is_empty());
+    }
+
+    #[test]
+    fn transfer_body_names_device_and_plays() {
+        assert_eq!(
+            transfer_body("d1"),
+            serde_json::json!({"device_ids": ["d1"], "play": true})
+        );
     }
 
     #[test]

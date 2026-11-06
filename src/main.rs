@@ -34,7 +34,11 @@ fn run(args: &[String]) -> i32 {
 
 fn dispatch(req: Requested) -> Result<()> {
     match req {
-        Requested::Tui => tui::run(Box::new(spotify::provider_from_config(&AppConfig::load())?)),
+        Requested::Tui => {
+            let cfg = AppConfig::load();
+            let provider = spotify::provider_from_config(&cfg)?;
+            tui::run(Box::new(provider), cfg.local_device())
+        }
         Requested::Status => status(),
         Requested::Ctl(name) => ctl(&name),
         Requested::Auth(AuthCmd::Login(port)) => auth_login(port),
