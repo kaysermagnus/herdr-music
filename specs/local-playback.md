@@ -463,6 +463,13 @@ drive.
   `streaming` gate in `start_local`. Readiness: 20 s with cached
   credentials, 180 s while the first-time app pick is pending, timeout
   message points at the app pick.
+- Final verdict (verified live, same date): even zeroconf-handshake
+  credentials get `error audio key 0 1` — Spotify denies decryption keys
+  to every third-party credential path, on 0.8.0 AND git main. Local
+  playback is therefore opt-in (`local_playback` defaults to false) and
+  the adapter watches engine stderr for the "audio key" signature to
+  report the block explicitly instead of silent track-skipping. The
+  machinery stays: a fixed librespot pin revives the feature.
 - Manual verification checklist: clean macOS, Linux, and Windows installs
   via `herdr plugin install`; `spotify-login` action opens the browser and
   completes; `open` action opens the pane; `d` shows "Herdr Music (this

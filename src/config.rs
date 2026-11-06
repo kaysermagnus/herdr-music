@@ -42,14 +42,14 @@ impl AppConfig {
     /// `local_device_name` come from the same file.
     pub fn load() -> Self {
         let mut spotify_client_id = std::env::var(CLIENT_ID_ENV).ok().filter(|s| !s.is_empty());
-        let mut local_playback = true;
+        let mut local_playback = false;
         let mut local_device_name = DEFAULT_LOCAL_DEVICE_NAME.to_string();
         if let Ok(text) = std::fs::read_to_string(config_dir().join("config.toml")) {
             if spotify_client_id.is_none() {
                 spotify_client_id = parse_client_id(&text);
             }
             let (lp, name) = parse_local(&text);
-            local_playback = lp.unwrap_or(true);
+            local_playback = lp.unwrap_or(false);
             if let Some(name) = name {
                 local_device_name = name;
             }

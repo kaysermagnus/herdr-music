@@ -37,13 +37,19 @@ or in `config.toml` inside the plugin config dir
 spotify_client_id = "your_client_id"
 
 # Optional: local playback (both have these defaults)
-local_playback = true          # set false to stay a pure remote control
+local_playback = false         # opt-in; see the note below
 local_device_name = "Herdr Music"
 ```
 
-The first time local playback starts, "Herdr Music" appears as a device
-in your Spotify app — pick it once to sign the engine in (that handshake
-gives it the credentials audio decryption needs, cached for later).
+**Local playback is opt-in and currently blocked upstream.** As of
+2026-11 Spotify denies audio-decryption keys to every credential type a
+third-party client can mint (librespot#1737) — the device registers and
+receives the stream but tracks fail to play. The plugin detects this
+signature and reports it instead of silently skipping. If librespot
+ships a fix, `cargo install` gets the new pinned version and enabling
+`local_playback` lights the feature up: the engine signs in by
+appearing in your Spotify app's device list (pick it once) and plays
+through the OS audio stack.
 
 ## Install
 

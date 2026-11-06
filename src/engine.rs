@@ -11,7 +11,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const STDERR_RING: usize = 20;
+/// Big enough that a "signature" error (audio-key spam) stays findable
+/// after the stream quiets down.
+const STDERR_RING: usize = 200;
 const TERM_GRACE: Duration = Duration::from_secs(2);
 
 /// One command to spawn: program, argv, extra environment.
@@ -125,6 +127,16 @@ impl Engine {
     /// True when the engine process has exited (crash or clean exit).
     pub fn exited(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(Some(_)) | Err(_))
+    }
+
+    /// True when the captured stderr tail contains `needle` — used to
+    /// spot known failure signatures (e.g. Spotify's audio-key block).
+    pub fn stderr_contains(&self, needle: &str) -> bool {
+        self.stderr_tail
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains(needle))
     }
 
     /// The engine's "Browse to:" OAuth URL, once printed.

@@ -352,7 +352,14 @@ impl MusicProvider for SpotifyProvider {
                 }
             }
             Phase::Ready { engine } => {
-                if engine.exited() {
+                if engine.stderr_contains("audio key") {
+                    // Upstream block: the device registers and receives
+                    // the stream but Spotify denies decryption keys, so
+                    // tracks just skip. Failing kills the engine.
+                    Step::Fail(
+                        "Spotify is blocking playback on this laptop (upstream restriction)".into(),
+                    )
+                } else if engine.exited() {
                     let line = engine
                         .last_error_line()
                         .unwrap_or_else(|| "engine exited".into());
