@@ -77,7 +77,7 @@ fn status() -> Result<()> {
 fn ctl(name: &str) -> Result<()> {
     let cmd = cli::ctl_command(name).ok_or_else(|| anyhow!("unknown ctl command `{name}`"))?;
     let provider = provider()?;
-    let mut controller = Controller::new(provider.name());
+    let mut controller = Controller::new();
     controller.handle(cmd, &provider);
     match controller.status() {
         Some(msg) => Err(anyhow!(msg.to_string())),

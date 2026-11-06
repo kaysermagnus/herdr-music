@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::time::{Duration, Instant};
 use url::Url;
 
 use crate::provider::ProviderError;
@@ -11,6 +12,8 @@ use super::client::TokenResponse;
 use super::tokens::StoredTokens;
 
 pub const DEFAULT_REDIRECT_PORT: u16 = 8888;
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(180);
+const CALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 const SCOPES: &str =
     "user-read-playback-state user-modify-playback-state user-read-currently-playing";
@@ -94,9 +97,6 @@ fn token_request(
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().unwrap_or_default();
-        if body.contains("invalid_grant") {
-            return Err(ProviderError::NotAuthenticated);
-        }
         return Err(ProviderError::Api(format!(
             "token request failed ({status}): {}",
             body.trim()
@@ -152,7 +152,12 @@ pub fn refresh(
             ("refresh_token", &tokens.refresh_token),
             ("client_id", client_id),
         ],
-    )?;
+    )
+    .map_err(|e| match e {
+        // Revoked or expired refresh token: the only fix is a new login.
+        ProviderError::Api(msg) if msg.contains("invalid_grant") => ProviderError::NotAuthenticated,
+        e => e,
+    })?;
     let refresh_token = tr
         .refresh_token
         .unwrap_or_else(|| tokens.refresh_token.clone());
@@ -177,12 +182,54 @@ fn callback_code(cb: &Callback, state: &str) -> Result<String, ProviderError> {
 
 /// Answer the browser before `login` returns — success or failure alike.
 fn respond(stream: &mut TcpStream, status: &str, message: &str) {
-    let body = format!("<!doctype html><title>herdr-music</title><p>{message}</p>");
+    let body = format!(
+        "<!doctype html><title>herdr-music</title><p>{}</p>",
+        escape_html(message)
+    );
     let response = format!(
         "HTTP/1.1 {status}\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = stream.write_all(response.as_bytes());
+}
+
+/// The message can carry the callback's `error` param, which is attacker-
+/// controlled text from the URL.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Wait for the browser's redirect, giving up after `timeout` so an
+/// abandoned login doesn't hold the port forever.
+fn accept_callback(listener: &TcpListener, timeout: Duration) -> Result<TcpStream, ProviderError> {
+    let io = |what: &str, e: std::io::Error| ProviderError::Api(format!("{what} failed: {e}"));
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| io("listen", e))?;
+    let deadline = Instant::now() + timeout;
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(ProviderError::Api(format!(
+                        "login timed out — no browser callback within {}s",
+                        timeout.as_secs()
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => return Err(io("accept", e)),
+        }
+    };
+    // Accepted sockets inherit non-blocking mode on macOS/BSD.
+    stream.set_nonblocking(false).map_err(|e| io("accept", e))?;
+    stream
+        .set_read_timeout(Some(CALLBACK_READ_TIMEOUT))
+        .map_err(|e| io("accept", e))?;
+    Ok(stream)
 }
 
 /// Interactive PKCE login: open the browser, catch the loopback redirect on
@@ -197,7 +244,9 @@ pub fn login(
 ) -> Result<StoredTokens, ProviderError> {
     let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| {
         ProviderError::Api(format!(
-            "cannot listen on 127.0.0.1:{port} — port busy? pick another: herdr-music auth login <port>. {e}"
+            "cannot listen on 127.0.0.1:{port} ({e}). To use another port, register \
+             http://127.0.0.1:<port>/callback in your Spotify app, then run \
+             herdr-music auth login <port>"
         ))
     })?;
     let redirect = redirect_uri(port);
@@ -217,9 +266,7 @@ pub fn login(
     #[cfg(target_os = "linux")]
     let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
 
-    let (mut stream, _) = listener
-        .accept()
-        .map_err(|e| ProviderError::Api(format!("accept failed: {e}")))?;
+    let mut stream = accept_callback(&listener, LOGIN_TIMEOUT)?;
     // Read until the request line arrives — only the first line is parsed,
     // but a single read() is not guaranteed to return it whole.
     let mut buf = Vec::with_capacity(1024);
@@ -291,6 +338,39 @@ mod tests {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
         assert_ne!(s, generate_state());
+    }
+
+    #[test]
+    fn accept_callback_times_out_when_nobody_connects() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let started = Instant::now();
+        let err = accept_callback(&listener, Duration::from_millis(300)).unwrap_err();
+        assert!(err.to_string().contains("timed out"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn accept_callback_returns_blocking_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::thread::spawn(move || {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.write_all(b"GET /callback?code=c&state=s HTTP/1.1\r\n\r\n")
+                .unwrap();
+        });
+        let mut stream = accept_callback(&listener, Duration::from_secs(5)).unwrap();
+        let mut buf = [0u8; 64];
+        let n = stream.read(&mut buf).unwrap();
+        assert!(buf[..n].starts_with(b"GET /callback"));
+        client.join().unwrap();
+    }
+
+    #[test]
+    fn escape_html_neutralizes_markup() {
+        assert_eq!(
+            escape_html("<script>a&b</script>"),
+            "&lt;script&gt;a&amp;b&lt;/script&gt;"
+        );
     }
 
     #[test]

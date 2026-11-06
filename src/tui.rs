@@ -68,7 +68,7 @@ pub fn run(provider: Box<dyn MusicProvider>) -> anyhow::Result<()> {
 }
 
 fn worker_loop(provider: Box<dyn MusicProvider>, rx: Receiver<Command>, tx: Sender<WorkerMsg>) {
-    let mut controller = Controller::new(provider.name());
+    let mut controller = Controller::new();
     let _ = tx.send(WorkerMsg::Name(provider.name()));
     loop {
         let cmd = match rx.recv_timeout(REFRESH_INTERVAL) {

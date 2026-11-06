@@ -25,19 +25,15 @@ pub struct Snapshot {
 /// Provider-agnostic controller: maps commands onto a `MusicProvider`,
 /// holds the last playback snapshot and a transient status message.
 /// Used directly by `ctl` (single-threaded) and by the TUI worker thread.
+#[derive(Default)]
 pub struct Controller {
-    pub provider_name: &'static str,
     playback: Option<Playback>,
     status: Option<String>,
 }
 
 impl Controller {
-    pub fn new(provider_name: &'static str) -> Self {
-        Self {
-            provider_name,
-            playback: None,
-            status: None,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Execute a command against the provider. Returns `true` only for
@@ -98,7 +94,7 @@ mod tests {
     #[test]
     fn quit_returns_true_and_does_not_call_provider() {
         let fake = FakeProvider::new();
-        let mut c = Controller::new(fake.name());
+        let mut c = Controller::new();
         assert!(c.handle(Command::Quit, &fake));
         assert!(fake.calls().is_empty());
     }
@@ -106,7 +102,7 @@ mod tests {
     #[test]
     fn stop_maps_to_pause() {
         let fake = FakeProvider::new();
-        let mut c = Controller::new(fake.name());
+        let mut c = Controller::new();
         c.handle(Command::Stop, &fake);
         assert_eq!(fake.calls(), vec!["pause"]);
     }
@@ -116,7 +112,7 @@ mod tests {
         let fake = FakeProvider::new();
         fake.push_playback(Some(sample_playback())); // consumed by toggle's playback()
         fake.push_playback(Some(sample_playback())); // consumed by refresh
-        let mut c = Controller::new(fake.name());
+        let mut c = Controller::new();
         c.handle(Command::Toggle, &fake);
         assert_eq!(fake.calls(), vec!["pause"]); // sample is playing
         assert!(c.snapshot().playback.is_some());
@@ -127,7 +123,7 @@ mod tests {
     fn provider_error_lands_on_status() {
         let fake = FakeProvider::new();
         *fake.error.lock().unwrap() = Some(ProviderError::NotAuthenticated);
-        let mut c = Controller::new(fake.name());
+        let mut c = Controller::new();
         c.handle(Command::Toggle, &fake);
         assert!(c.status().unwrap().contains("not connected"));
     }
@@ -138,7 +134,7 @@ mod tests {
         let mut pb = sample_playback();
         pb.progress = std::time::Duration::from_secs(195);
         fake.push_playback(Some(pb)); // for seek_relative's playback()
-        let mut c = Controller::new(fake.name());
+        let mut c = Controller::new();
         c.handle(Command::SeekForward, &fake);
         assert_eq!(fake.calls(), vec!["seek:200"]);
     }

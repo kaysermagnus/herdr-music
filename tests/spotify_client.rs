@@ -196,6 +196,8 @@ fn transport_commands_hit_expected_endpoints() {
     assert!(reqs
         .iter()
         .all(|r| r.contains("authorization: Bearer access-1")));
+    // Spotify answers 411 Length Required without it.
+    assert!(reqs.iter().all(|r| r.contains("content-length: 0")));
 }
 
 #[test]
@@ -213,6 +215,19 @@ fn expired_status_refreshes_and_retries() {
     assert!(reqs[1].starts_with("POST /api/token"), "{}", reqs[1]);
     assert!(reqs[1].contains("grant_type=refresh_token"));
     assert!(reqs[2].contains("authorization: Bearer access-2"));
+}
+
+#[test]
+fn revoked_refresh_token_is_not_authenticated() {
+    let stub = Stub::serve(vec![
+        (401, ""),
+        (
+            400,
+            r#"{"error":"invalid_grant","error_description":"Refresh token revoked"}"#,
+        ),
+    ]);
+    let p = provider(&stub, "revoked", Some(fresh_tokens()));
+    assert_eq!(p.playback().unwrap_err(), ProviderError::NotAuthenticated);
 }
 
 #[test]
