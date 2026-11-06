@@ -1,6 +1,9 @@
 use crate::app::{Command, Controller, Snapshot};
-use crate::provider::MusicProvider;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crate::provider::{MusicProvider, Playback};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    MouseButton, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -36,7 +39,7 @@ struct TermGuard;
 impl TermGuard {
     fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
-        if let Err(err) = execute!(io::stdout(), EnterAlternateScreen) {
+        if let Err(err) = execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture) {
             let _ = disable_raw_mode();
             return Err(err.into());
         }
@@ -47,7 +50,7 @@ impl TermGuard {
 impl Drop for TermGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
     }
 }
 
@@ -107,17 +110,25 @@ fn ui_loop(rx: &Receiver<WorkerMsg>, tx: &Sender<Command>) -> anyhow::Result<()>
         if !event::poll(POLL_INTERVAL)? {
             continue;
         }
-        if let Event::Key(key) = event::read()? {
-            if key.kind != KeyEventKind::Press {
-                continue;
+        let cmd = match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => map_key(&key),
+            Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
+                let size = terminal.size()?;
+                let playback = state.snapshot.as_ref().and_then(|s| s.playback.as_ref());
+                let r = regions(
+                    Rect::new(0, 0, size.width, size.height),
+                    time_width(playback),
+                );
+                click(&r, playback, m.column, m.row)
             }
-            match map_key(&key) {
-                Some(Command::Quit) => break,
-                Some(cmd) => {
-                    let _ = tx.send(cmd);
-                }
-                None => {}
+            _ => None,
+        };
+        match cmd {
+            Some(Command::Quit) => break,
+            Some(cmd) => {
+                let _ = tx.send(cmd);
             }
+            None => {}
         }
     }
     Ok(())
@@ -172,43 +183,128 @@ fn scrubber(width: usize, ratio: f64, accent: Color) -> Vec<Span<'static>> {
     ]
 }
 
-fn draw(frame: &mut Frame, state: &UiState) {
-    let accent = accent_for(state.provider_name);
-    let dim = Style::default().dim();
+/// Screen areas shared by `draw` and `click`, so a click always lands on
+/// what was drawn there.
+struct Regions {
+    title: Rect,
+    artist: Rect,
+    album: Rect,
+    elapsed: Rect,
+    bar: Rect,
+    total: Rect,
+    prev: Rect,
+    toggle: Rect,
+    next: Rect,
+    status: Rect,
+    keys: Rect,
+}
 
-    let card = Block::default()
-        .borders(Borders::ALL)
-        .border_style(dim)
-        .title(Span::styled(
-            format!(" {} ", state.provider_name),
-            Style::default().fg(accent),
-        ));
-    let inner = card.inner(frame.area());
-    frame.render_widget(card, frame.area());
+fn regions(area: Rect, time_width: u16) -> Regions {
+    let inner = Block::default().borders(Borders::ALL).inner(area);
     let inner = Rect {
         x: inner.x + 2,
         width: inner.width.saturating_sub(4),
         ..inner
     };
-    let rows = Layout::vertical([
+    let [_, title, artist, album, _, scrub, _, transport, _, status, keys] = Layout::vertical([
         Constraint::Length(1), // breathing room
-        Constraint::Length(1), // meter + title
-        Constraint::Length(1), // artist
-        Constraint::Length(1), // album
         Constraint::Length(1),
-        Constraint::Length(1), // scrubber
         Constraint::Length(1),
-        Constraint::Length(1), // transport
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Min(0),
-        Constraint::Length(1), // device / status
-        Constraint::Length(1), // keys
+        Constraint::Length(1),
+        Constraint::Length(1),
     ])
-    .split(inner);
+    .areas(inner);
+    let [elapsed, _, bar, _, total] = Layout::horizontal([
+        Constraint::Length(time_width),
+        Constraint::Length(2),
+        Constraint::Min(0),
+        Constraint::Length(2),
+        Constraint::Length(time_width),
+    ])
+    .areas(scrub);
+    let [_, prev, _, toggle, _, next, _] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(2),
+        Constraint::Length(5),
+        Constraint::Length(2),
+        Constraint::Length(5),
+        Constraint::Length(2),
+        Constraint::Fill(1),
+    ])
+    .areas(transport);
+    Regions {
+        title,
+        artist,
+        album,
+        elapsed,
+        bar,
+        total,
+        prev,
+        toggle,
+        next,
+        status,
+        keys,
+    }
+}
+
+/// Width of the longest time label: the track length, since elapsed never
+/// exceeds it (`-:--` when idle is 4 cells too).
+fn time_width(playback: Option<&Playback>) -> u16 {
+    playback.map_or(4, |pb| fmt_duration(pb.track.duration).len() as u16)
+}
+
+/// Map a left click to a command. Buttons get one cell of slack on each
+/// side; a click on the scrub bar seeks to that spot.
+fn click(r: &Regions, playback: Option<&Playback>, col: u16, row: u16) -> Option<Command> {
+    let hit = |rect: Rect, slack: u16| {
+        rect.width > 0
+            && row >= rect.y
+            && row < rect.y + rect.height
+            && col + slack >= rect.x
+            && col < rect.x + rect.width + slack
+    };
+    if hit(r.prev, 1) {
+        Some(Command::Previous)
+    } else if hit(r.toggle, 1) {
+        Some(Command::Toggle)
+    } else if hit(r.next, 1) {
+        Some(Command::Next)
+    } else if hit(r.bar, 0) {
+        let pb = playback?;
+        let span = r.bar.width.saturating_sub(1).max(1) as f64;
+        let ratio = ((col - r.bar.x) as f64 / span).min(1.0);
+        Some(Command::SeekTo(pb.track.duration.mul_f64(ratio)))
+    } else {
+        None
+    }
+}
+
+fn draw(frame: &mut Frame, state: &UiState) {
+    let accent = accent_for(state.provider_name);
+    let dim = Style::default().dim();
 
     let snapshot = state.snapshot.as_ref();
     let playback = snapshot.and_then(|s| s.playback.as_ref());
     let playing = playback.map(|pb| pb.is_playing);
     let status = snapshot.and_then(|s| s.status.as_deref());
+    let r = regions(frame.area(), time_width(playback));
+
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(dim)
+            .title(Span::styled(
+                format!(" {} ", state.provider_name),
+                Style::default().fg(accent),
+            )),
+        frame.area(),
+    );
 
     let (title, artist, album) = match playback {
         Some(pb) => (
@@ -238,10 +334,10 @@ fn draw(frame: &mut Frame, state: &UiState) {
             Span::raw("  "),
             Span::styled(title, title_style),
         ])),
-        rows[1],
+        r.title,
     );
-    frame.render_widget(Paragraph::new(format!("      {artist}")), rows[2]);
-    frame.render_widget(Paragraph::new(format!("      {album}")).style(dim), rows[3]);
+    frame.render_widget(Paragraph::new(format!("      {artist}")), r.artist);
+    frame.render_widget(Paragraph::new(format!("      {album}")).style(dim), r.album);
 
     let (elapsed, total) = match playback {
         Some(pb) => (
@@ -260,36 +356,33 @@ fn draw(frame: &mut Frame, state: &UiState) {
     } else {
         ("-:--".to_string(), "-:--".to_string())
     };
-    let bar_width = (rows[5].width as usize).saturating_sub(left.len() + right.len() + 4);
     let bar_accent = if playback.is_some() {
         accent
     } else {
         Color::DarkGray
     };
-    let mut track = vec![Span::styled(left, dim), Span::raw("  ")];
-    track.extend(scrubber(bar_width, ratio, bar_accent));
-    track.push(Span::raw("  "));
-    track.push(Span::styled(right, dim));
-    frame.render_widget(Paragraph::new(Line::from(track)), rows[5]);
+    frame.render_widget(Paragraph::new(left).style(dim).right_aligned(), r.elapsed);
+    frame.render_widget(
+        Paragraph::new(Line::from(scrubber(
+            r.bar.width as usize,
+            ratio,
+            bar_accent,
+        ))),
+        r.bar,
+    );
+    frame.render_widget(Paragraph::new(right).style(dim), r.total);
 
     let action = if playing == Some(true) {
         "❚❚"
     } else {
         "▶ "
     };
+    frame.render_widget(Paragraph::new("◀◀").style(dim), r.prev);
     frame.render_widget(
-        Paragraph::new(
-            Line::from(vec![
-                Span::styled("◀◀", dim),
-                Span::raw("     "),
-                Span::styled(action, Style::default().fg(accent).bold()),
-                Span::raw("     "),
-                Span::styled("▶▶", dim),
-            ])
-            .centered(),
-        ),
-        rows[7],
+        Paragraph::new(action).style(Style::default().fg(accent).bold()),
+        r.toggle,
     );
+    frame.render_widget(Paragraph::new("▶▶").style(dim), r.next);
 
     let bottom = match status {
         Some(err) => Line::from(err.to_string()).fg(Color::Red),
@@ -301,10 +394,10 @@ fn draw(frame: &mut Frame, state: &UiState) {
             None => Line::default(),
         },
     };
-    frame.render_widget(Paragraph::new(bottom), rows[9]);
+    frame.render_widget(Paragraph::new(bottom), r.status);
     frame.render_widget(
         Paragraph::new(FOOTER).style(Style::default().fg(Color::DarkGray)),
-        rows[10],
+        r.keys,
     );
 }
 
@@ -351,10 +444,16 @@ mod tests {
         }
     }
 
-    fn rendered(state: &UiState) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(60, 14)).unwrap();
+    const AREA: Rect = Rect::new(0, 0, 60, 14);
+
+    fn render_buf(state: &UiState) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(AREA.width, AREA.height)).unwrap();
         terminal.draw(|frame| draw(frame, state)).unwrap();
-        let buf = terminal.backend().buffer();
+        terminal.backend().buffer().clone()
+    }
+
+    fn rendered(state: &UiState) -> String {
+        let buf = render_buf(state);
         (0..buf.area.height)
             .map(|y| {
                 (0..buf.area.width)
@@ -491,6 +590,68 @@ mod tests {
         let text = rendered(&state);
         assert!(text.contains("not connected"));
         assert!(!text.contains("Nothing playing"));
+    }
+
+    #[test]
+    fn clicks_on_buttons_map_to_transport() {
+        let pb = playback();
+        let r = regions(AREA, time_width(Some(&pb)));
+        let click_at = |rect: Rect| click(&r, Some(&pb), rect.x, rect.y);
+        assert_eq!(click_at(r.prev), Some(Command::Previous));
+        assert_eq!(click_at(r.toggle), Some(Command::Toggle));
+        assert_eq!(click_at(r.next), Some(Command::Next));
+        // One cell of slack either side of a button.
+        assert_eq!(
+            click(&r, Some(&pb), r.toggle.x - 1, r.toggle.y),
+            Some(Command::Toggle)
+        );
+        // The middle of the gap between buttons does nothing.
+        assert_eq!(click(&r, Some(&pb), r.prev.x + 4, r.prev.y), None);
+        assert_eq!(click_at(r.title), None);
+    }
+
+    #[test]
+    fn click_on_bar_seeks_to_that_spot() {
+        let pb = playback(); // 200s track
+        let r = regions(AREA, time_width(Some(&pb)));
+        let at = |col| click(&r, Some(&pb), col, r.bar.y);
+        assert_eq!(at(r.bar.x), Some(Command::SeekTo(Duration::ZERO)));
+        assert_eq!(
+            at(r.bar.x + r.bar.width - 1),
+            Some(Command::SeekTo(Duration::from_secs(200)))
+        );
+        match at(r.bar.x + (r.bar.width - 1) / 2) {
+            Some(Command::SeekTo(d)) => assert!((95..=105).contains(&d.as_secs()), "{d:?}"),
+            other => panic!("expected seek, got {other:?}"),
+        }
+        assert_eq!(click(&r, None, r.bar.x, r.bar.y), None, "nothing to seek");
+    }
+
+    #[test]
+    fn buttons_are_drawn_where_clicks_land() {
+        let pb = playback();
+        let r = regions(AREA, time_width(Some(&pb)));
+        let buf = render_buf(&state_with(Some(Snapshot {
+            playback: Some(pb),
+            status: None,
+        })));
+        assert_eq!(buf[(r.prev.x, r.prev.y)].symbol(), "◀");
+        assert_eq!(buf[(r.toggle.x, r.toggle.y)].symbol(), "❚");
+        assert_eq!(buf[(r.next.x, r.next.y)].symbol(), "▶");
+        assert!(["━", "●"].contains(&buf[(r.bar.x, r.bar.y)].symbol()));
+        assert_eq!(buf[(r.bar.x + r.bar.width - 1, r.bar.y)].symbol(), "─");
+    }
+
+    #[test]
+    fn time_column_fits_the_track_length() {
+        let mut pb = playback();
+        assert_eq!(time_width(None), 4);
+        pb.track.duration = Duration::from_secs(200);
+        assert_eq!(time_width(Some(&pb)), 4);
+        pb.track.duration = Duration::from_secs(1200);
+        assert_eq!(time_width(Some(&pb)), 5);
+        pb.track.duration = Duration::from_secs(3723);
+        assert_eq!(time_width(Some(&pb)), 7);
     }
 
     #[test]

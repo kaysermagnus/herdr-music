@@ -1,4 +1,5 @@
 use crate::provider::{MusicProvider, Playback, ProviderError, SEEK_STEP_SECS};
+use std::time::Duration;
 
 /// Every transport/UI intent, produced by key events or `ctl` argv.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,6 +12,8 @@ pub enum Command {
     Previous,
     SeekForward,
     SeekBack,
+    /// Absolute position, e.g. from a click on the scrub bar.
+    SeekTo(Duration),
     Refresh,
     Quit,
 }
@@ -49,6 +52,7 @@ impl Controller {
             Command::Previous => self.run(provider, |p| p.previous()),
             Command::SeekForward => self.run(provider, |p| p.seek_relative(SEEK_STEP_SECS)),
             Command::SeekBack => self.run(provider, |p| p.seek_relative(-SEEK_STEP_SECS)),
+            Command::SeekTo(pos) => self.run(provider, |p| p.seek(pos)),
         }
         false
     }
@@ -97,6 +101,14 @@ mod tests {
         let mut c = Controller::new();
         assert!(c.handle(Command::Quit, &fake));
         assert!(fake.calls().is_empty());
+    }
+
+    #[test]
+    fn seek_to_seeks_to_absolute_position() {
+        let fake = FakeProvider::new();
+        let mut c = Controller::new();
+        c.handle(Command::SeekTo(Duration::from_secs(42)), &fake);
+        assert_eq!(fake.calls(), vec!["seek:42"]);
     }
 
     #[test]

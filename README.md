@@ -84,6 +84,11 @@ dirs): `herdr-music tui`, `herdr-music ctl next`, `herdr-music status`,
 The level meter moves while playing and rests while paused. The center
 glyph is the action `space` will take.
 
+Mouse: click `◀◀` / `▶` / `▶▶` to skip back, play/pause, or skip ahead.
+Click anywhere on the bar to jump to that spot. The player captures the
+mouse while open, so hold your terminal's selection modifier (often
+`shift`, or `option` on macOS) to select text in its pane.
+
 | key | action |
 | --- | --- |
 | `space` | play / pause |
