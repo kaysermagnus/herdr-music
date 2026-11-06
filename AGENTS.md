@@ -5,15 +5,20 @@ Herdr plugin: Rust TUI music controller. Every music service sits behind the
 
 ## Workflow rules
 
-1. **Spec first for every new feature.** Before writing code, write
-   `specs/<feature-name>.md` with the same sections as `specs/initial.md` (Problem
-   Statement, Solution, User Stories, Implementation Decisions, Testing
-   Decisions, Out of Scope). Show it to the user and start coding only once
-   they approve. Bug fixes and review fixes skip this step.
-2. **Review before every commit.** Run the `ponytail-review` skill on the
-   change, show the user its report, apply the fixes they choose, re-run
-   `cargo test`, then commit. The commit is done when tests pass and every
-   chosen fix is in.
+Each step runs in its own subagent profile from `.devin/agents/`, which pins
+the model for that step: `spec-writer` (Fable), `coder` (SWE-2), `reviewer`
+(Opus). Run them in the foreground so their tools can prompt for approval.
+
+1. **Spec first for every new feature.** Before writing code, the
+   `spec-writer` subagent writes `specs/<feature-name>.md` with the same
+   sections as `specs/initial.md`. Show it to the user and start coding only
+   once they approve. Bug fixes and review fixes skip this step.
+2. **Code in the `coder` subagent.** Hand it the approved spec, or the review
+   fixes the user chose; it works test-first and leaves changes uncommitted.
+3. **Review before every commit.** The `reviewer` subagent runs
+   `ponytail-review` on the uncommitted change. Show the user its report,
+   have `coder` apply the fixes they choose, re-run `cargo test`, then
+   commit. The commit is done when tests pass and every chosen fix is in.
 
 ## Testing
 
