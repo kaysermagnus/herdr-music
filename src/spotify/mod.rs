@@ -84,10 +84,18 @@ impl SpotifyProvider {
     ) -> Result<Response, ProviderError> {
         let url = format!("{}{}", self.endpoints.api, path);
         let build = |token: &str| {
-            self.http
+            let req = self
+                .http
                 .request(method.clone(), &url)
                 .bearer_auth(token)
-                .query(query)
+                .query(query);
+            // Spotify's edge returns 411 Length Required on PUT/POST
+            // without an explicit empty body.
+            if method == Method::GET {
+                req
+            } else {
+                req.header(reqwest::header::CONTENT_LENGTH, "0")
+            }
         };
         let resp = build(&self.access_token()?).send().map_err(api_err)?;
         if resp.status().as_u16() != 401 {
