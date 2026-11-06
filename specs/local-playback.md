@@ -455,7 +455,9 @@ drive.
   and even librespot's own `--enable-oauth` credentials register the
   device but get no audio keys (tracks fail to decrypt and skip). Only
   zeroconf-handshake credentials work, so the engine runs discovery
-  (with-libmdns build) + `--system-cache`: the user picks the device in
+  (with-dns-sd on macOS — libmdns fails to advertise on multi-interface
+  Macs — with-libmdns on Linux/Windows) + `--system-cache`: the user
+  picks the device in
   their Spotify app once, credentials persist in `engine-cache/`, later
   starts reuse them. The plugin token is Web-API-only — no token or
   `streaming` gate in `start_local`. Readiness: 20 s with cached
