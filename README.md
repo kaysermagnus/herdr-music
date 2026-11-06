@@ -63,7 +63,26 @@ Or run the binary directly (`HERDR_PLUGIN_*` dirs fall back to platform
 dirs): `herdr-music tui`, `herdr-music ctl next`, `herdr-music status`,
 `herdr-music auth login`.
 
-### TUI keys
+### TUI
+
+```
+┌ spotify ─────────────────────────────────────────┐
+│                                                  │
+│  ▂▅▃▇  Midnight City                             │
+│        M83                                       │
+│        Hurry Up, We're Dreaming                  │
+│                                                  │
+│  1:23  ━━━━━━━━━━●───────────────────────  4:03  │
+│                                                  │
+│                  ◀◀     ❚❚     ▶▶                │
+│                                                  │
+│  on Cesar's Mac                                  │
+│  space play/pause   n/p skip   ←/→ 10s   q quit  │
+└──────────────────────────────────────────────────┘
+```
+
+The level meter moves while playing and rests while paused. The center
+glyph is the action `space` will take.
 
 | key | action |
 | --- | --- |
@@ -72,7 +91,7 @@ dirs): `herdr-music tui`, `herdr-music ctl next`, `herdr-music status`,
 | `n` / `p` | next / previous track |
 | `→` `l` / `←` `h` | forward / rewind 10s |
 | `r` | refresh now playing |
-| `q` | quit |
+| `q` / `esc` | quit |
 
 ### Keybindings in Herdr
 
