@@ -21,6 +21,7 @@ fn run(args: &[String]) -> i32 {
             println!("{}", cli::USAGE);
             0
         }
+        Ok(Requested::Open) => open_pane(),
         Ok(req) => match dispatch(req) {
             Ok(()) => 0,
             Err(e) => {
@@ -49,7 +50,38 @@ fn dispatch(req: Requested) -> Result<()> {
             println!("spotify: disconnected");
             Ok(())
         }
+        Requested::Open => Ok(()),
         Requested::Help => unreachable!("handled in run()"),
+    }
+}
+
+/// The `open` action: ask Herdr to open the player pane, propagating its
+/// exit status so the action reports failure honestly.
+fn open_pane() -> i32 {
+    open_pane_with(std::env::var("HERDR_BIN_PATH").ok(), |cmd| {
+        cmd.status().map(|status| status.code().unwrap_or(1))
+    })
+}
+
+/// `open` split from its environment for tests: `herdr` is `HERDR_BIN_PATH`
+/// (`None` when unset) and `run` executes the built command.
+fn open_pane_with(
+    herdr: Option<String>,
+    run: impl Fn(&mut std::process::Command) -> std::io::Result<i32>,
+) -> i32 {
+    let Some(herdr) = herdr.filter(|path| !path.is_empty()) else {
+        eprintln!("HERDR_BIN_PATH is not set — `open` only works inside Herdr");
+        return 1;
+    };
+    let (program, args) = cli::open_pane_command(&herdr);
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args);
+    match run(&mut cmd) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("failed to launch `{herdr}`: {e}");
+            1
+        }
     }
 }
 
@@ -103,4 +135,35 @@ fn auth_login(port: Option<u16>) -> Result<()> {
     )?;
     println!("spotify: connected");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_pane_fails_without_herdr_bin_path() {
+        let no_spawn = |_: &mut std::process::Command| -> std::io::Result<i32> {
+            unreachable!("must not spawn")
+        };
+        assert_eq!(open_pane_with(None, no_spawn), 1);
+        assert_eq!(open_pane_with(Some(String::new()), no_spawn), 1);
+    }
+
+    #[test]
+    fn open_pane_propagates_herdr_exit_status() {
+        assert_eq!(open_pane_with(Some("/bin/herdr".into()), |_| Ok(0)), 0);
+        assert_eq!(open_pane_with(Some("/bin/herdr".into()), |_| Ok(7)), 7);
+    }
+
+    #[test]
+    fn open_pane_reports_spawn_failure() {
+        let code = open_pane_with(Some("/bin/herdr".into()), |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no herdr",
+            ))
+        });
+        assert_eq!(code, 1);
+    }
 }

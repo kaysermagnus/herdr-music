@@ -3,7 +3,7 @@ name = "Music"
 version = "0.2.0"
 min_herdr_version = "0.7.0"
 description = "TUI music controller — Spotify via OAuth, extensible to more providers"
-platforms = ["linux", "macos"]
+platforms = ["linux", "macos", "windows"]
 
 [[build]]
 command = ["cargo", "build", "--release"]
@@ -18,7 +18,7 @@ command = ["./target/release/herdr-music", "tui"]
 id = "open"
 title = "Open music player"
 contexts = ["workspace"]
-command = ["sh", "-c", "\"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-music --entrypoint player"]
+command = ["./target/release/herdr-music", "open"]
 
 [[actions]]
 id = "play-pause"

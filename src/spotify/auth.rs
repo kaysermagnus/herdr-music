@@ -232,6 +232,26 @@ fn accept_callback(listener: &TcpListener, timeout: Duration) -> Result<TcpStrea
     Ok(stream)
 }
 
+/// Browser launcher for `url` on `os` (a `std::env::consts::OS` value), as
+/// (program, args). The URL is always one plain argv element — on Windows
+/// `rundll32` hands it to the default browser without cmd interpreting the
+/// query string's `&` as a command separator. `None` where no launcher is
+/// known.
+pub fn browser_launch_command(os: &str, url: &str) -> Option<(String, Vec<String>)> {
+    let mut args = Vec::new();
+    let program = match os {
+        "macos" => "open",
+        "linux" => "xdg-open",
+        "windows" => {
+            args.push("url.dll,FileProtocolHandler".to_string());
+            "rundll32"
+        }
+        _ => return None,
+    };
+    args.push(url.to_string());
+    Some((program.to_string(), args))
+}
+
 /// Interactive PKCE login: open the browser, catch the loopback redirect on
 /// `port`, exchange the code, persist the tokens. Blocks until the browser
 /// calls back (or the socket fails).
@@ -261,10 +281,9 @@ pub fn login(
     );
 
     println!("Opening browser to connect Spotify — if it doesn't open, visit:\n{url}");
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(&url).spawn();
-    #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+    if let Some((program, args)) = browser_launch_command(std::env::consts::OS, &url) {
+        let _ = std::process::Command::new(program).args(args).spawn();
+    }
 
     let mut stream = accept_callback(&listener, LOGIN_TIMEOUT)?;
     // Read until the request line arrives — only the first line is parsed,
@@ -392,6 +411,41 @@ mod tests {
     fn missing_code_is_none() {
         let cb = parse_callback_query("state=xyz");
         assert!(cb.code.is_none());
+    }
+
+    #[test]
+    fn browser_launch_linux_uses_xdg_open() {
+        assert_eq!(
+            browser_launch_command("linux", "https://example.com/auth"),
+            Some(("xdg-open".into(), vec!["https://example.com/auth".into()]))
+        );
+    }
+
+    #[test]
+    fn browser_launch_macos_uses_open() {
+        assert_eq!(
+            browser_launch_command("macos", "https://example.com/auth"),
+            Some(("open".into(), vec!["https://example.com/auth".into()]))
+        );
+    }
+
+    #[test]
+    fn browser_launch_windows_uses_rundll32_and_keeps_url_whole() {
+        // The OAuth URL's `&` must reach rundll32 as one argv element — cmd
+        // would split it as a command separator, so rundll32 is used.
+        let url = "https://accounts.spotify.com/authorize?client_id=x&state=y";
+        assert_eq!(
+            browser_launch_command("windows", url),
+            Some((
+                "rundll32".into(),
+                vec!["url.dll,FileProtocolHandler".into(), url.into()]
+            ))
+        );
+    }
+
+    #[test]
+    fn browser_launch_unknown_os_is_none() {
+        assert_eq!(browser_launch_command("freebsd", "https://x"), None);
     }
 
     #[test]

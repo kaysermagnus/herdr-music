@@ -4,6 +4,7 @@ pub const USAGE: &str = "herdr-music — TUI music controller
 
 USAGE:
     herdr-music [tui]              Open the player TUI
+    herdr-music open               Open the player pane (inside Herdr)
     herdr-music status             Print the current track
     herdr-music ctl <command>      Run a transport command and exit
     herdr-music auth <command>     Manage provider login
@@ -26,6 +27,7 @@ pub enum AuthCmd {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Requested {
     Tui,
+    Open,
     Ctl(String),
     Auth(AuthCmd),
     Status,
@@ -38,6 +40,7 @@ pub fn parse(args: &[String]) -> Result<Requested, String> {
         [] => Ok(Requested::Tui),
         [cmd] => match cmd.as_str() {
             "tui" => Ok(Requested::Tui),
+            "open" => Ok(Requested::Open),
             "status" => Ok(Requested::Status),
             "-h" | "--help" | "help" => Ok(Requested::Help),
             _ => err(),
@@ -59,6 +62,26 @@ pub fn parse(args: &[String]) -> Result<Requested, String> {
         },
         _ => err(),
     }
+}
+
+/// Herdr argv for the `open` action, as (program, args) — plain argv with
+/// no shell, so the same command works on every OS Herdr supports.
+pub fn open_pane_command(herdr_bin: &str) -> (String, Vec<String>) {
+    (
+        herdr_bin.to_string(),
+        [
+            "plugin",
+            "pane",
+            "open",
+            "--plugin",
+            "herdr-music",
+            "--entrypoint",
+            "player",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+    )
 }
 
 /// `ctl` name → controller command. `stop` maps to pause because Spotify's
@@ -113,6 +136,30 @@ mod tests {
         );
         assert!(parse(&args(&["auth", "login", "abc"])).is_err());
         assert!(parse(&args(&["auth", "bogus"])).is_err());
+    }
+
+    #[test]
+    fn open_maps_to_its_variant() {
+        assert_eq!(parse(&args(&["open"])), Ok(Requested::Open));
+        assert!(parse(&args(&["open", "extra"])).is_err());
+    }
+
+    #[test]
+    fn open_pane_command_asks_herdr_for_the_player_pane() {
+        let (program, argv) = open_pane_command("/opt/herdr/bin/herdr");
+        assert_eq!(program, "/opt/herdr/bin/herdr");
+        assert_eq!(
+            argv,
+            [
+                "plugin",
+                "pane",
+                "open",
+                "--plugin",
+                "herdr-music",
+                "--entrypoint",
+                "player"
+            ]
+        );
     }
 
     #[test]
