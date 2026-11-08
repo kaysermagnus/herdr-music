@@ -1,3 +1,4 @@
+pub mod airplay;
 pub mod app;
 pub mod cli;
 pub mod config;

@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use herdr_music::app::Controller;
 use herdr_music::cli::{self, AuthCmd, Requested};
-use herdr_music::config::{self, AppConfig};
-use herdr_music::provider::MusicProvider;
+use herdr_music::config::{self, AppConfig, ProviderKind};
+use herdr_music::provider::{self, MusicProvider};
 use herdr_music::spotify;
 use herdr_music::tui;
 
@@ -34,15 +34,22 @@ fn run(args: &[String]) -> i32 {
 
 fn dispatch(req: Requested) -> Result<()> {
     match req {
-        Requested::Tui => {
-            let cfg = AppConfig::load();
-            let provider = spotify::provider_from_config(&cfg)?;
-            tui::run(Box::new(provider))
-        }
+        Requested::Tui => match AppConfig::load() {
+            Ok(cfg) => {
+                let provider = provider::from_config(&cfg)?;
+                tui::run(provider)
+            }
+            // A config error lands on the TUI status line — the pane is
+            // the one place a plugin can show it to the user.
+            Err(msg) => tui::run(Box::new(provider::ErrorProvider::new(msg))),
+        },
         Requested::Status => status(),
         Requested::Ctl(name) => ctl(&name),
         Requested::Auth(AuthCmd::Login(port)) => auth_login(port),
         Requested::Auth(AuthCmd::Status) => {
+            // Auth stays Spotify-only under every provider — it manages
+            // the Spotify tokens, not a pane session.
+            AppConfig::load().map_err(|e| anyhow!(e))?;
             match spotify::connection_status(&config::state_dir())? {
                 true => println!("spotify: connected"),
                 false => println!("spotify: not connected — run `herdr-music auth login`"),
@@ -50,6 +57,7 @@ fn dispatch(req: Requested) -> Result<()> {
             Ok(())
         }
         Requested::Auth(AuthCmd::Logout) => {
+            AppConfig::load().map_err(|e| anyhow!(e))?;
             spotify::logout(&config::state_dir())?;
             println!("spotify: disconnected");
             Ok(())
@@ -89,8 +97,24 @@ fn open_pane_with(
     }
 }
 
+/// `ctl`/`status` run in a separate process and can only reach Spotify.
+/// The AirPlay receiver lives inside the pane's TUI process, so under
+/// `provider = "airplay"` those commands explain that instead of
+/// silently talking to Spotify. `auth` is unaffected: it manages the
+/// Spotify token file, which exists under either provider.
+fn headless_config() -> Result<AppConfig> {
+    let cfg = AppConfig::load().map_err(|e| anyhow!(e))?;
+    if cfg.provider == ProviderKind::AirPlay {
+        anyhow::bail!(
+            "this command is not supported under provider airplay — \
+             the AirPlay receiver runs inside the player pane"
+        );
+    }
+    Ok(cfg)
+}
+
 fn provider() -> Result<spotify::SpotifyProvider> {
-    Ok(spotify::provider_from_config(&AppConfig::load())?)
+    Ok(spotify::provider_from_config(&headless_config()?)?)
 }
 
 fn status() -> Result<()> {
@@ -125,13 +149,16 @@ fn ctl(name: &str) -> Result<()> {
 }
 
 fn auth_login(port: Option<u16>) -> Result<()> {
-    let client_id = AppConfig::load().spotify_client_id.ok_or_else(|| {
-        anyhow!(
-            "spotify client id not configured — set HERDR_MUSIC_SPOTIFY_CLIENT_ID \
+    let client_id = AppConfig::load()
+        .map_err(|e| anyhow!(e))?
+        .spotify_client_id
+        .ok_or_else(|| {
+            anyhow!(
+                "spotify client id not configured — set HERDR_MUSIC_SPOTIFY_CLIENT_ID \
              or add spotify_client_id to {}",
-            config::config_dir().join("config.toml").display()
-        )
-    })?;
+                config::config_dir().join("config.toml").display()
+            )
+        })?;
     spotify::login(
         &client_id,
         &config::state_dir(),
@@ -169,5 +196,80 @@ mod tests {
             ))
         });
         assert_eq!(code, 1);
+    }
+
+    // Config-dir env var + temp file fixtures for headless dispatch tests.
+    // Tests mutate process env, so they serialize on this lock.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct AirplayConfig {
+        dir: std::path::PathBuf,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl AirplayConfig {
+        fn new(name: &str) -> Self {
+            let guard = ENV_LOCK.lock().unwrap();
+            let dir =
+                std::env::temp_dir().join(format!("herdr-music-{name}-{}", std::process::id()));
+            let state = dir.join("state");
+            std::fs::create_dir_all(&state).unwrap();
+            std::fs::write(dir.join("config.toml"), "provider = \"airplay\"\n").unwrap();
+            std::env::set_var("HERDR_PLUGIN_CONFIG_DIR", &dir);
+            std::env::set_var("HERDR_PLUGIN_STATE_DIR", &state);
+            Self { dir, _guard: guard }
+        }
+    }
+
+    impl Drop for AirplayConfig {
+        fn drop(&mut self) {
+            std::env::remove_var("HERDR_PLUGIN_CONFIG_DIR");
+            std::env::remove_var("HERDR_PLUGIN_STATE_DIR");
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn headless_commands_fail_under_airplay_provider() {
+        let _cfg = AirplayConfig::new("headless");
+        for req in [Requested::Status, Requested::Ctl("next".into())] {
+            let name = format!("{req:?}");
+            let err = dispatch(req).unwrap_err().to_string();
+            assert!(
+                err.contains("not supported under provider airplay"),
+                "{name}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_stays_spotify_only_under_airplay_provider() {
+        // `auth` manages the Spotify token file, not a pane session, so
+        // the airplay guard must not block it. With no tokens stored it
+        // reports "not connected" and exits 0.
+        let _cfg = AirplayConfig::new("auth");
+        dispatch(Requested::Auth(AuthCmd::Status)).unwrap();
+        assert_eq!(run(&["auth".into(), "status".into()]), 0);
+    }
+
+    #[test]
+    fn run_status_exits_1_under_airplay_provider() {
+        let _cfg = AirplayConfig::new("run");
+        assert_eq!(run(&["status".into()]), 1);
+        assert_eq!(run(&["ctl".into(), "play-pause".into()]), 1);
+    }
+
+    #[test]
+    fn unknown_provider_value_is_a_load_error() {
+        let guard = ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("herdr-music-badcfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), "provider = \"sonos\"\n").unwrap();
+        std::env::set_var("HERDR_PLUGIN_CONFIG_DIR", &dir);
+        let err = dispatch(Requested::Status).unwrap_err().to_string();
+        assert!(err.contains("sonos"), "{err}");
+        std::env::remove_var("HERDR_PLUGIN_CONFIG_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+        drop(guard);
     }
 }

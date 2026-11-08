@@ -236,8 +236,12 @@ keep the dep tree small):
 
 - Allowed: `ratatui`, `crossterm`, `reqwest` (`blocking`+`json` only),
   `serde`/`serde_json`, `base64`, `sha2`, `rand`, `dirs`, `anyhow`, `url`.
-- Excluded deliberately: `tokio` and any async stack, `rspotify`, `oauth2`,
-  `clap`, `open`/`webbrowser` crates.
+- Excluded deliberately: `rspotify`, `oauth2`, `clap`, `open`/`webbrowser`
+  crates.
+- Exception (`specs/airplay-receiver.md`): `tokio` is permitted inside
+  `airplay::receiver` only — the shairplay RAOP server is tokio-based.
+  Nothing above the `MusicProvider` seam gains an async signature; the
+  two-thread `std::sync::mpsc` design is unchanged.
 
 ## Testing Decisions
 

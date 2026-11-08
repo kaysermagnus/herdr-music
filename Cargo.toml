@@ -17,6 +17,16 @@ rand = "0.8"
 dirs = "5"
 anyhow = "1"
 url = "2"
+# AirPlay 1 (RAOP) receiver — LGPL-3.0 (see NOTICE). Pinned exact: pre-1.0
+# API; 0.10.0 was the newest release ≥7 days old at adoption.
+shairplay = "=0.10.0"
+# Current-thread runtime inside airplay::receiver only — shairplay needs
+# it; the rest of the crate stays on std threads.
+tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
+
+# PCM output on Linux pipes to a player binary instead — no audio headers.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+cpal = "0.18"
 
 [profile.release]
 opt-level = 2

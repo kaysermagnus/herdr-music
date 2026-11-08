@@ -25,11 +25,15 @@ const EQ_STEP_MS: u128 = 250;
 
 enum WorkerMsg {
     Name(&'static str),
+    /// Advertised receiver name (AirPlay); `None` for remote-control
+    /// providers.
+    Receiver(Option<String>),
     State(Snapshot),
 }
 
 struct UiState {
     provider_name: &'static str,
+    receiver_name: Option<String>,
     snapshot: Option<Snapshot>,
     received_at: Instant,
     started_at: Instant,
@@ -74,6 +78,7 @@ pub fn run(provider: Box<dyn MusicProvider>) -> anyhow::Result<()> {
 fn worker_loop(provider: Box<dyn MusicProvider>, rx: Receiver<Command>, tx: Sender<WorkerMsg>) {
     let mut controller = Controller::new();
     let _ = tx.send(WorkerMsg::Name(provider.name()));
+    let _ = tx.send(WorkerMsg::Receiver(provider.receiver_name()));
     loop {
         let cmd = match rx.recv_timeout(REFRESH_INTERVAL) {
             Ok(Command::Quit) | Err(RecvTimeoutError::Disconnected) => break,
@@ -93,6 +98,7 @@ fn ui_loop(rx: &Receiver<WorkerMsg>, tx: &Sender<Command>) -> anyhow::Result<()>
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut state = UiState {
         provider_name: "herdr-music",
+        receiver_name: None,
         snapshot: None,
         received_at: Instant::now(),
         started_at: Instant::now(),
@@ -101,6 +107,7 @@ fn ui_loop(rx: &Receiver<WorkerMsg>, tx: &Sender<Command>) -> anyhow::Result<()>
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 WorkerMsg::Name(name) => state.provider_name = name,
+                WorkerMsg::Receiver(name) => state.receiver_name = name,
                 WorkerMsg::State(snap) => {
                     state.snapshot = Some(snap);
                     state.received_at = Instant::now();
@@ -163,7 +170,26 @@ fn map_key(key: &KeyEvent, snap: Option<&Snapshot>) -> Option<Command> {
 fn accent_for(provider: &str) -> Color {
     match provider {
         "spotify" => Color::Green,
+        "airplay" => Color::Magenta,
         _ => Color::Cyan,
+    }
+}
+
+/// Empty-pane hint, keyed on the provider like the accent: a receiver is
+/// waiting for a sender, a remote control is waiting for playback.
+fn idle_hint(state: &UiState) -> (String, String) {
+    match state.provider_name {
+        "airplay" => (
+            "Waiting for an AirPlay sender".to_string(),
+            format!(
+                "Pick {} in the AirPlay list",
+                state.receiver_name.as_deref().unwrap_or("this laptop")
+            ),
+        ),
+        _ => (
+            "Nothing playing".to_string(),
+            "Start a song on any device and it shows up here".to_string(),
+        ),
     }
 }
 
@@ -360,11 +386,10 @@ fn draw(frame: &mut Frame, state: &UiState) {
         ),
         // Blank while connecting or when an error already explains the state.
         None if snapshot.is_none() || status.is_some() => Default::default(),
-        None => (
-            "Nothing playing".to_string(),
-            "Start a song on any device and it shows up here".to_string(),
-            String::new(),
-        ),
+        None => {
+            let (hint, sub) = idle_hint(state);
+            (hint, sub, String::new())
+        }
     };
     let title_style = if playback.is_some() {
         Style::default().bold()
@@ -545,6 +570,7 @@ mod tests {
     fn state_with(snapshot: Option<Snapshot>) -> UiState {
         UiState {
             provider_name: "fake",
+            receiver_name: None,
             snapshot,
             received_at: Instant::now(),
             started_at: Instant::now(),
@@ -694,6 +720,25 @@ mod tests {
         let text = rendered(&state);
         assert!(text.contains("Nothing playing"));
         assert!(text.contains("-:--"));
+    }
+
+    #[test]
+    fn airplay_idle_hint_names_the_receiver() {
+        let mut state = state_with(Some(snap(None)));
+        state.provider_name = "airplay";
+        state.receiver_name = Some("Studio Mac".into());
+        let text = rendered(&state);
+        assert!(text.contains("Waiting for an AirPlay sender"), "{text}");
+        assert!(text.contains("Studio Mac"), "{text}");
+        assert!(!text.contains("Nothing playing"), "{text}");
+    }
+
+    #[test]
+    fn airplay_idle_hint_without_name_points_at_this_laptop() {
+        let mut state = state_with(Some(snap(None)));
+        state.provider_name = "airplay";
+        let text = rendered(&state);
+        assert!(text.contains("this laptop"), "{text}");
     }
 
     #[test]

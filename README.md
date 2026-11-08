@@ -2,14 +2,15 @@
 
 A [Herdr](https://herdr.dev) plugin: TUI music controller that lives in a
 pane next to your work. Written in Rust around a provider interface — the
-first adapter is **Spotify**.
+first adapter is **Spotify**, the second an **AirPlay receiver**.
 
 - Now playing: track, artists, album, progress bar, device
 - Controls: play / pause / stop, next / previous, seek ±10s
 - Device picker: `d` lists your Spotify Connect devices, Enter moves
   playback there
+- AirPlay: stream audio from an iPhone, iPad or Mac to the pane
 - Headless actions for every control, bindable to Herdr keys
-- Small footprint: ~3 MB static binary, no async runtime, minimal deps
+- Small footprint: ~3.5 MB static binary, minimal deps
 
 ## Prerequisites
 
@@ -33,6 +34,14 @@ or in `config.toml` inside the plugin config dir
 ```toml
 spotify_client_id = "your_client_id"
 ```
+
+`config.toml` keys:
+
+| key | default | meaning |
+| --- | --- | --- |
+| `spotify_client_id` | — | your Spotify app's client id |
+| `provider` | `"spotify"` | adapter: `"spotify"` or `"airplay"` |
+| `airplay_name` | `"Herdr Music"` | name advertised in the AirPlay list |
 
 ## Install
 
@@ -117,6 +126,39 @@ command = "herdr-music.play-pause"
 description = "music play/pause"
 ```
 
+## AirPlay
+
+With `provider = "airplay"` the pane becomes an AirPlay 1 (RAOP)
+**receiver** instead of a Spotify remote: this laptop advertises itself
+as a speaker named `airplay_name` (default "Herdr Music") while the pane
+is open.
+
+- Senders: Apple devices only — iPhone, iPad or Mac. Pick the laptop in
+  the AirPlay/audio output list; there is nothing to install and no
+  account to connect.
+- The pane shows the sender's now-playing metadata and the transport
+  keys (`space`, `n`, `p`) drive the sender back over DACP. The sender's
+  volume slider changes the laptop's playback level. Seeking is not
+  supported over AirPlay — the `←`/`→` keys will tell you so.
+- Remote control currently works on Linux and Windows only. shairplay
+  cannot discover the sender's DACP port on macOS yet, so the transport
+  keys show an error there until upstream fixes port discovery;
+  receiving, metadata and volume work on all three platforms.
+- Setup: set `provider = "airplay"` in `config.toml`, open the pane, pick
+  the laptop on your phone. The pane shows "Waiting for an AirPlay
+  sender" until something connects, and quitting the pane unadvertises
+  the receiver.
+- `d` shows the receiver row — active while a sender is connected.
+- `ctl`, `status` and `auth` run in a separate process and cannot reach a
+  session inside the pane, so under `provider = "airplay"` they exit with
+  an explanatory error.
+- On macOS/Windows the OS may ask to allow incoming connections the first
+  time (RTSP TCP plus RTP/control/timing UDP ports) — accept it once.
+- On Linux, audio plays through the first of `pw-play`, `paplay` or
+  `aplay` on PATH (`pipewire-utils`, `pulseaudio-utils` or `alsa-utils`).
+  With none installed the pane keeps accepting sessions and tells you
+  what to install instead of staying silent.
+
 ## Architecture
 
 ```
@@ -126,16 +168,18 @@ description = "music play/pause"
             └──────┬───────┘   previous / seek / play_pause /
         ┌──────────┴──┐        seek_relative
         ▼             ▼
-   SpotifyProvider   (future adapters:
-   oauth+web api      apple music, mpd, …)
+   SpotifyProvider   AirPlayProvider
+   oauth+web api      RAOP receiver (shairplay)
 ```
 
 - TUI, `ctl`, and `status` only ever see `MusicProvider`; tests exercise
   everything above the seam with an in-memory `FakeProvider`.
-- The adapter is tested through the same trait against a stub HTTP server
-  (its endpoints are injectable).
+- The Spotify adapter is tested through the same trait against a stub
+  HTTP server (its endpoints are injectable); the AirPlay adapter keeps
+  its shairplay events behind a `SenderEvent`/`SenderControl` seam.
 - Two threads: UI (crossterm events, ~100 ms tick) + worker (commands and a
-  2 s playback poll) over `std::sync::mpsc`. No tokio.
+  2 s playback poll) over `std::sync::mpsc`. The AirPlay receiver owns a
+  third thread for its tokio runtime, confined to `src/airplay/receiver.rs`.
 
 ## Development
 
@@ -146,3 +190,12 @@ cargo build --release
 
 Specs live in `specs/`: the original plugin spec is `specs/initial.md`,
 with its task breakdown in `specs/initial-tasks.md`.
+
+## Credits
+
+- [ratatui](https://ratatui.rs) + crossterm — the TUI
+- [shairplay](https://github.com/metaneutrons/shairplay-rust) — the AirPlay
+  receiver, **LGPL-3.0**. Rust links crates statically, which LGPL §4(d)(0)
+  allows when the user can relink a modified library; this plugin is
+  distributed as source and `cargo build --release` runs on your machine,
+  so replacing the crate and rebuilding is the relink. See `NOTICE`.

@@ -108,6 +108,81 @@ pub trait MusicProvider: Send {
 
     /// Move playback to `device_id`, keeping it playing if it was.
     fn transfer(&self, device_id: &str) -> Result<(), ProviderError>;
+
+    /// The name this provider advertises to senders, when it is itself a
+    /// receiver (AirPlay). Remote-control providers return `None`.
+    fn receiver_name(&self) -> Option<String> {
+        None
+    }
+}
+
+/// A provider that always fails with `message` — surfaces a load-time
+/// error inside the TUI's status line instead of exiting the pane.
+pub struct ErrorProvider {
+    message: String,
+}
+
+impl ErrorProvider {
+    pub fn new(message: String) -> Self {
+        Self { message }
+    }
+
+    fn err(&self) -> ProviderError {
+        ProviderError::Api(self.message.clone())
+    }
+}
+
+impl MusicProvider for ErrorProvider {
+    fn name(&self) -> &'static str {
+        "herdr-music"
+    }
+    fn playback(&self) -> Result<Option<Playback>, ProviderError> {
+        Err(self.err())
+    }
+    fn play(&self) -> Result<(), ProviderError> {
+        Err(self.err())
+    }
+    fn pause(&self) -> Result<(), ProviderError> {
+        Err(self.err())
+    }
+    fn next(&self) -> Result<(), ProviderError> {
+        Err(self.err())
+    }
+    fn previous(&self) -> Result<(), ProviderError> {
+        Err(self.err())
+    }
+    fn seek(&self, _position: Duration) -> Result<(), ProviderError> {
+        Err(self.err())
+    }
+    fn devices(&self) -> Result<Vec<Device>, ProviderError> {
+        Err(self.err())
+    }
+    fn transfer(&self, _device_id: &str) -> Result<(), ProviderError> {
+        Err(self.err())
+    }
+}
+
+/// Build the adapter `cfg.provider` selects. `airplay` is injectable so
+/// tests can assert the dispatch without spawning the receiver (which
+/// would bind its RAOP ports).
+pub fn from_config(
+    cfg: &crate::config::AppConfig,
+) -> Result<Box<dyn MusicProvider>, ProviderError> {
+    from_config_with(cfg, |c| {
+        crate::airplay::provider_from_config(c).map(|p| Box::new(p) as Box<dyn MusicProvider>)
+    })
+}
+
+fn from_config_with(
+    cfg: &crate::config::AppConfig,
+    airplay: impl FnOnce(&crate::config::AppConfig) -> Result<Box<dyn MusicProvider>, ProviderError>,
+) -> Result<Box<dyn MusicProvider>, ProviderError> {
+    match cfg.provider {
+        crate::config::ProviderKind::Spotify => {
+            crate::spotify::provider_from_config(cfg).map(|p| Box::new(p) as Box<dyn MusicProvider>)
+        }
+        crate::config::ProviderKind::AirPlay => airplay(cfg),
+    }
 }
 
 #[cfg(test)]
@@ -308,6 +383,46 @@ mod tests {
         assert_eq!(
             fake.seek_relative(10).unwrap_err(),
             ProviderError::NoActiveDevice
+        );
+    }
+
+    fn cfg(provider: crate::config::ProviderKind) -> crate::config::AppConfig {
+        crate::config::AppConfig {
+            spotify_client_id: Some("id".into()),
+            provider,
+            airplay_name: "Herdr Music".into(),
+        }
+    }
+
+    #[test]
+    fn from_config_picks_spotify_by_default() {
+        let provider = from_config_with(&cfg(crate::config::ProviderKind::Spotify), |_| {
+            panic!("airplay constructor must not run for spotify config")
+        })
+        .unwrap();
+        assert_eq!(provider.name(), "spotify");
+    }
+
+    #[test]
+    fn from_config_picks_airplay_for_airplay_cfg() {
+        let provider = from_config_with(&cfg(crate::config::ProviderKind::AirPlay), |_| {
+            Ok(Box::new(FakeProvider::new()))
+        })
+        .unwrap();
+        assert_eq!(provider.name(), "fake");
+    }
+
+    #[test]
+    fn error_provider_reports_the_load_error() {
+        let p = ErrorProvider::new("bad config".into());
+        assert_eq!(p.name(), "herdr-music");
+        assert_eq!(
+            p.playback().unwrap_err(),
+            ProviderError::Api("bad config".into())
+        );
+        assert_eq!(
+            p.next().unwrap_err(),
+            ProviderError::Api("bad config".into())
         );
     }
 }

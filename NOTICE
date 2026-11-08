@@ -1,0 +1,18 @@
+herdr-music — third-party license notices
+=========================================
+
+shairplay (https://github.com/metaneutrons/shairplay-rust)
+License: LGPL-3.0-or-later
+
+Used to implement the AirPlay 1 (RAOP) receiver behind the `airplay`
+provider. Rust links crate dependencies statically, so shairplay object
+code is combined into the Apache-2.0 herdr-music binary.
+
+LGPL-3.0 §4(d)(0) permits this combination when the user can relink
+against a modified library. herdr-music satisfies that by construction:
+the plugin is distributed as source and `herdr plugin install`/`link`
+runs `cargo build --release` on the user's machine — replacing the
+crate version in Cargo.toml and rebuilding *is* the relink.
+
+A copy of the LGPL-3.0 ships with the shairplay crate source; cargo
+vendors it under ~/.cargo/registry when building.
