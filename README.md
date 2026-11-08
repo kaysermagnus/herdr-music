@@ -141,9 +141,10 @@ is open.
   volume slider changes the laptop's playback level. Seeking is not
   supported over AirPlay — the `←`/`→` keys will tell you so.
 - Remote control currently works on Linux and Windows only. shairplay
-  cannot discover the sender's DACP port on macOS yet, so the transport
-  keys show an error there until upstream fixes port discovery;
-  receiving, metadata and volume work on all three platforms.
+  transport keys do not reach the sender on macOS: unsigned binaries
+  cannot open outbound LAN connections there, and iOS rejects the
+  legacy DACP credential anyway (HTTP 403). Receiving, metadata and
+  volume work on all three platforms.
 - Setup: set `provider = "airplay"` in `config.toml`, open the pane, pick
   the laptop on your phone. The pane shows "Waiting for an AirPlay
   sender" until something connects, and quitting the pane unadvertises

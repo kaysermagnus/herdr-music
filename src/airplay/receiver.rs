@@ -120,6 +120,31 @@ fn serve(
     });
 }
 
+/// A stable 6-byte identity for the advert — random per launch would
+/// make the iPhone cache a new dead device every time the pane opens.
+/// Locally administered, unicast, derived from the machine's identity.
+fn hwaddr() -> Vec<u8> {
+    use sha2::Digest;
+    let id = ["/etc/machine-id", "/var/lib/dbus/machine-id"]
+        .iter()
+        .find_map(|p| std::fs::read(p).ok().filter(|v| !v.is_empty()))
+        .or_else(|| {
+            std::process::Command::new("hostname")
+                .output()
+                .ok()
+                .map(|o| o.stdout)
+                .filter(|v| !v.is_empty())
+        })
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|v| v.into_encoded_bytes())
+                .unwrap_or_default()
+        });
+    let v = sha2::Sha256::digest(&id);
+    vec![(v[0] & !0x01) | 0x02, v[1], v[2], v[3], v[4], v[5]]
+}
+
 /// The RAOP server as advertised. `build` binds nothing, so tests can
 /// inspect the advert.
 fn build_server(
@@ -128,6 +153,7 @@ fn build_server(
 ) -> Result<RaopServer, shairplay::ShairplayError> {
     RaopServer::builder()
         .name(name)
+        .hwaddr(hwaddr())
         .output_sample_rate(44_100)
         .output_max_channels(2)
         // iOS senders stream RSA-encrypted ALAC; the crate's et=0 default makes them fail at play.
@@ -280,6 +306,16 @@ mod tests {
         let txt = server.service_info().raop_txt;
         let et = txt.iter().find(|(k, _)| k == "et").map(|(_, v)| v.as_str());
         assert_eq!(et, Some("0,1"));
+    }
+
+    /// A random MAC per launch made the sender cache a new dead device
+    /// every pane open — the address must be stable and well-formed.
+    #[test]
+    fn hwaddr_is_stable_locally_administered_unicast() {
+        let a = hwaddr();
+        assert_eq!(a, hwaddr());
+        assert_eq!(a.len(), 6);
+        assert_eq!(a[0] & 0x03, 0x02);
     }
 
     /// The `Receiver::drop` escape hatch for a player that stopped
