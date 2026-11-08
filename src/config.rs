@@ -30,66 +30,20 @@ fn resolve_dir(env: Option<String>, fallback: Option<PathBuf>) -> PathBuf {
 
 pub struct AppConfig {
     pub spotify_client_id: Option<String>,
-    pub local_playback: bool,
-    pub local_device_name: String,
 }
-
-const DEFAULT_LOCAL_DEVICE_NAME: &str = "Herdr Music";
 
 impl AppConfig {
     /// Client id resolution: env var first, then `spotify_client_id` in
-    /// `config.toml` inside the config dir. `local_playback` and
-    /// `local_device_name` come from the same file.
+    /// `config.toml` inside the config dir. Unknown keys are ignored.
     pub fn load() -> Self {
         let mut spotify_client_id = std::env::var(CLIENT_ID_ENV).ok().filter(|s| !s.is_empty());
-        let mut local_playback = false;
-        let mut local_device_name = DEFAULT_LOCAL_DEVICE_NAME.to_string();
         if let Ok(text) = std::fs::read_to_string(config_dir().join("config.toml")) {
             if spotify_client_id.is_none() {
                 spotify_client_id = parse_client_id(&text);
             }
-            let (lp, name) = parse_local(&text);
-            local_playback = lp.unwrap_or(false);
-            if let Some(name) = name {
-                local_device_name = name;
-            }
         }
-        Self {
-            spotify_client_id,
-            local_playback,
-            local_device_name,
-        }
+        Self { spotify_client_id }
     }
-
-    /// The name the local engine registers, when local playback is on.
-    pub fn local_device(&self) -> Option<String> {
-        self.local_playback.then(|| self.local_device_name.clone())
-    }
-}
-
-fn parse_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-    let (k, v) = line.split_once('=')?;
-    (k.trim() == key).then(|| v.trim().trim_matches('"').trim_matches('\''))
-}
-
-fn parse_local(toml_text: &str) -> (Option<bool>, Option<String>) {
-    let mut playback = None;
-    let mut name = None;
-    for line in toml_text.lines() {
-        let line = line.trim();
-        if line.starts_with('#') {
-            continue;
-        }
-        if let Some(v) = parse_value(line, "local_playback") {
-            playback = Some(v == "true");
-        }
-        if let Some(v) = parse_value(line, "local_device_name") {
-            if !v.is_empty() {
-                name = Some(v.to_string());
-            }
-        }
-    }
-    (playback, name)
 }
 
 fn parse_client_id(toml_text: &str) -> Option<String> {
@@ -145,20 +99,5 @@ mod tests {
     fn missing_or_empty_client_id_is_none() {
         assert_eq!(parse_client_id("other = 1"), None);
         assert_eq!(parse_client_id("spotify_client_id = \"\""), None);
-    }
-
-    #[test]
-    fn local_playback_keys_parse_with_defaults() {
-        assert_eq!(parse_local("other = 1"), (None, None));
-        assert_eq!(parse_local("local_playback = false"), (Some(false), None));
-        assert_eq!(
-            parse_local("local_playback = true\nlocal_device_name = \"Desk\""),
-            (Some(true), Some("Desk".into()))
-        );
-        // Unknown values and comments don't count.
-        assert_eq!(
-            parse_local("# local_playback = false\nlocal_device_name = \"\""),
-            (None, None)
-        );
     }
 }

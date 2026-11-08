@@ -1,5 +1,9 @@
 # Spec: local playback — stream Spotify to this laptop from the player pane
 
+> **Withdrawn (2026-11).** Verified live: Spotify denies audio-decryption
+> keys to every third-party credential path, so this feature cannot work.
+> Removed by `specs/slim-down.md`; the implementation remains in git history.
+
 ## Problem Statement
 
 herdr-music is a remote control: every transport verb behind `MusicProvider`
@@ -450,26 +454,6 @@ drive.
 - Risk (Windows, check first): Herdr may not accept
   `./target/release/herdr-music` as a pane/action command there; see the
   port subsection for the fallback reasoning.
-- Post-spec upstream change (verified live 2026-11): Spotify rejects
-  third-party Web API tokens at Connect/login5 with `INVALID_CREDENTIALS`,
-  and even librespot's own `--enable-oauth` credentials register the
-  device but get no audio keys (tracks fail to decrypt and skip). Only
-  zeroconf-handshake credentials work, so the engine runs discovery
-  (with-dns-sd on macOS — libmdns fails to advertise on multi-interface
-  Macs — with-libmdns on Linux/Windows) + `--system-cache`: the user
-  picks the device in
-  their Spotify app once, credentials persist in `engine-cache/`, later
-  starts reuse them. The plugin token is Web-API-only — no token or
-  `streaming` gate in `start_local`. Readiness: 20 s with cached
-  credentials, 180 s while the first-time app pick is pending, timeout
-  message points at the app pick.
-- Final verdict (verified live, same date): even zeroconf-handshake
-  credentials get `error audio key 0 1` — Spotify denies decryption keys
-  to every third-party credential path, on 0.8.0 AND git main. Local
-  playback is therefore opt-in (`local_playback` defaults to false) and
-  the adapter watches engine stderr for the "audio key" signature to
-  report the block explicitly instead of silent track-skipping. The
-  machinery stays: a fixed librespot pin revives the feature.
 - Manual verification checklist: clean macOS, Linux, and Windows installs
   via `herdr plugin install`; `spotify-login` action opens the browser and
   completes; `open` action opens the pane; `d` shows "Herdr Music (this

@@ -1,6 +1,5 @@
-use herdr_music::provider::{LocalStatus, MusicProvider, ProviderError};
+use herdr_music::provider::{MusicProvider, ProviderError};
 use herdr_music::spotify::client::Endpoints;
-use herdr_music::spotify::local::Invocation;
 use herdr_music::spotify::tokens::StoredTokens;
 use herdr_music::spotify::SpotifyProvider;
 use std::io::{Read, Write};
@@ -145,63 +144,6 @@ fn provider(stub: &Stub, tag: &str, tokens: Option<StoredTokens>) -> SpotifyProv
 fn fresh_tokens() -> StoredTokens {
     StoredTokens::new("access-1".into(), "refresh-1".into(), 3600)
 }
-
-/// Tokens carrying the `streaming` scope, as post-feature logins save.
-fn scoped_tokens() -> StoredTokens {
-    let mut t = fresh_tokens();
-    t.scopes = vec![
-        "user-read-playback-state".into(),
-        "user-modify-playback-state".into(),
-        "user-read-currently-playing".into(),
-        "streaming".into(),
-    ];
-    t
-}
-
-/// Same self-reinvoke trick as tests/engine.rs: the spawned copy of this
-/// test binary parks as the fake engine when the env var is set.
-#[test]
-fn fake_engine() {
-    if std::env::var("HERDR_MUSIC_FAKE_ENGINE").is_err() {
-        return;
-    }
-    loop {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-/// An invocation that spawns this test binary as a parked fake engine.
-fn fake_invocation(dir: PathBuf) -> Invocation {
-    Invocation {
-        program: std::env::current_exe().unwrap(),
-        args: vec!["fake_engine".into(), "--exact".into(), "--nocapture".into()],
-        sink: None,
-        pidfile: dir.join("engine.pid"),
-        oauth_pending: false,
-    }
-}
-
-fn provider_with_engine(stub: &Stub, tag: &str) -> SpotifyProvider {
-    let dir = state_dir(tag);
-    scoped_tokens()
-        .save(&StoredTokens::token_path(&dir))
-        .unwrap();
-    let inv_dir = dir.clone();
-    SpotifyProvider::with_endpoints(
-        "test-client",
-        Endpoints {
-            api: format!("http://{}", stub.addr),
-            accounts: format!("http://{}", stub.addr),
-        },
-        dir,
-    )
-    .with_engine_invocation(move |_| Ok(fake_invocation(inv_dir.clone())))
-}
-
-const DEVICES_EMPTY: &str = r#"{"devices": []}"#;
-const DEVICES_LOCAL: &str = r#"{"devices": [
-    {"id": "local-1", "name": "Herdr Music", "is_active": false}
-]}"#;
 
 #[test]
 fn playback_maps_player_json() {
@@ -350,45 +292,4 @@ fn transfer_404_is_no_active_device() {
         p.transfer("gone").unwrap_err(),
         ProviderError::NoActiveDevice
     );
-}
-
-#[test]
-fn start_local_is_disabled_when_invocation_fails() {
-    let stub = Stub::serve(vec![]);
-    let dir = state_dir("noinv");
-    scoped_tokens()
-        .save(&StoredTokens::token_path(&dir))
-        .unwrap();
-    let p = SpotifyProvider::with_endpoints(
-        "test-client",
-        Endpoints {
-            api: format!("http://{}", stub.addr),
-            accounts: format!("http://{}", stub.addr),
-        },
-        dir,
-    )
-    .with_engine_invocation(|_| Err("local engine not installed".to_string()));
-    p.start_local("Herdr Music").unwrap();
-    match p.local_status() {
-        LocalStatus::Disabled { reason, silent } => {
-            assert!(reason.contains("not installed"), "{reason}");
-            assert!(!silent, "a missing engine belongs on the status line");
-        }
-        other => panic!("expected Disabled, got {other:?}"),
-    }
-}
-
-#[test]
-fn start_local_spawns_and_becomes_ready_via_the_device_list() {
-    let stub = Stub::serve(vec![
-        (200, DEVICES_EMPTY), // first tick: not registered yet
-        (200, DEVICES_LOCAL), // second tick: our device appeared
-    ]);
-    let p = provider_with_engine(&stub, "local");
-    p.start_local("Herdr Music").unwrap();
-    assert_eq!(p.local_status(), LocalStatus::Starting);
-    assert_eq!(p.local_status(), LocalStatus::Ready);
-    // Readiness is detected through the device list, not engine output.
-    let reqs = stub.requests();
-    assert!(reqs.iter().all(|r| r.starts_with("GET /me/player/devices")));
 }

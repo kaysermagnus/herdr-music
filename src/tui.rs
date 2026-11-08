@@ -1,5 +1,5 @@
-use crate::app::{picker_rows, Command, Controller, PickerAction, Snapshot};
-use crate::provider::{LocalStatus, MusicProvider, Playback};
+use crate::app::{Command, Controller, Snapshot};
+use crate::provider::{MusicProvider, Playback};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
     MouseButton, MouseEventKind,
@@ -56,15 +56,13 @@ impl Drop for TermGuard {
 }
 
 /// Run the TUI: this thread drives the terminal, a worker thread owns the
-/// provider and controller, connected by two mpsc channels. `local_name`
-/// is the local engine's device name, when local playback is enabled.
-pub fn run(provider: Box<dyn MusicProvider>, local_name: Option<String>) -> anyhow::Result<()> {
+/// provider and controller, connected by two mpsc channels.
+pub fn run(provider: Box<dyn MusicProvider>) -> anyhow::Result<()> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
     let (msg_tx, msg_rx) = mpsc::channel::<WorkerMsg>();
 
-    let worker = thread::spawn(move || worker_loop(provider, local_name, cmd_rx, msg_tx));
+    let worker = thread::spawn(move || worker_loop(provider, cmd_rx, msg_tx));
     let _ = cmd_tx.send(Command::Refresh);
-    let _ = cmd_tx.send(Command::StartLocal);
 
     let result = ui_loop(&msg_rx, &cmd_tx);
 
@@ -73,13 +71,8 @@ pub fn run(provider: Box<dyn MusicProvider>, local_name: Option<String>) -> anyh
     result
 }
 
-fn worker_loop(
-    provider: Box<dyn MusicProvider>,
-    local_name: Option<String>,
-    rx: Receiver<Command>,
-    tx: Sender<WorkerMsg>,
-) {
-    let mut controller = Controller::new().with_local(local_name);
+fn worker_loop(provider: Box<dyn MusicProvider>, rx: Receiver<Command>, tx: Sender<WorkerMsg>) {
+    let mut controller = Controller::new();
     let _ = tx.send(WorkerMsg::Name(provider.name()));
     loop {
         let cmd = match rx.recv_timeout(REFRESH_INTERVAL) {
@@ -309,16 +302,10 @@ fn click(r: &Regions, snap: Option<&Snapshot>, col: u16, row: u16) -> Option<Com
             return None;
         }
         let index = (row - inner.y) as usize;
-        let rows = picker_rows(
-            &snap.devices,
-            snap.local_name.as_deref(),
-            &snap.local_status,
-        );
-        return match rows.get(index).map(|r| &r.action) {
-            Some(PickerAction::Transfer(id)) => Some(Command::SelectDevice(id.clone())),
-            Some(PickerAction::StartLocal) => Some(Command::StartLocal),
-            _ => None,
-        };
+        return snap
+            .devices
+            .get(index)
+            .map(|d| Command::SelectDevice(d.id.clone()));
     }
     let playback = snap.playback.as_ref();
     let hit = |rect: Rect, slack: u16| {
@@ -448,19 +435,9 @@ fn draw(frame: &mut Frame, state: &UiState) {
         None if snapshot.is_none() => {
             Line::from(format!("Connecting to {}…", state.provider_name)).style(dim)
         }
-        None => match snapshot.and_then(|s| s.local_alert.as_deref()) {
-            Some(alert) => {
-                let style = match snapshot.map(|s| &s.local_status) {
-                    // "starting…" is progress, not an error.
-                    Some(LocalStatus::Starting) => dim,
-                    _ => Style::default().fg(Color::Red),
-                };
-                Line::from(alert.to_string()).style(style)
-            }
-            None => match playback.and_then(|pb| pb.device.as_deref()) {
-                Some(device) => Line::from(format!("on {device}")).style(dim),
-                None => Line::default(),
-            },
+        None => match playback.and_then(|pb| pb.device.as_deref()) {
+            Some(device) => Line::from(format!("on {device}")).style(dim),
+            None => Line::default(),
         },
     };
     frame.render_widget(Paragraph::new(bottom), r.status);
@@ -488,15 +465,10 @@ fn draw_picker(frame: &mut Frame, area: Rect, snap: &Snapshot, accent: Color, di
         area,
     );
     let inner = picker_inner(area);
-    let rows = picker_rows(
-        &snap.devices,
-        snap.local_name.as_deref(),
-        &snap.local_status,
-    );
-    for (i, row) in rows.iter().enumerate().take(inner.height as usize) {
+    for (i, row) in snap.devices.iter().enumerate().take(inner.height as usize) {
         let marker = if i == snap.picker_index {
             "▸"
-        } else if row.active {
+        } else if row.is_active {
             "●"
         } else {
             " "
@@ -509,7 +481,7 @@ fn draw_picker(frame: &mut Frame, area: Rect, snap: &Snapshot, accent: Color, di
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(marker, Style::default().fg(accent)),
-                Span::styled(format!(" {}", row.label), style),
+                Span::styled(format!(" {}", row.name), style),
             ])),
             Rect::new(inner.x, inner.y + i as u16, inner.width, 1),
         );
@@ -565,9 +537,6 @@ mod tests {
             playback,
             status: None,
             devices: Vec::new(),
-            local_name: None,
-            local_status: LocalStatus::NotStarted,
-            local_alert: None,
             picker_open: false,
             picker_index: 0,
         }
@@ -793,7 +762,6 @@ mod tests {
     fn picker_rows_are_drawn_where_clicks_land() {
         let mut s = snap(None);
         s.picker_open = true;
-        s.local_name = Some("Herdr Music".into());
         s.devices = vec![
             device("d1", "Kitchen", true),
             device("d2", "Herdr Music", false),
@@ -802,7 +770,7 @@ mod tests {
         let buf = render_buf(&state_with(Some(s.clone())));
         let inner = picker_inner(r.picker);
 
-        // Row 0 is Kitchen (active), row 1 is the local device.
+        // Row 0 is Kitchen (active), row 1 is Herdr Music (inactive).
         assert!(buf[(inner.x + 2, inner.y)].symbol() == "K");
         assert_eq!(buf[(inner.x, inner.y + 1)].symbol(), " ");
         assert_eq!(
@@ -821,26 +789,14 @@ mod tests {
     fn picker_renders_labels_and_footer() {
         let mut s = snap(None);
         s.picker_open = true;
-        s.local_name = Some("Herdr Music".into());
-        s.local_status = LocalStatus::Failed("dead".into());
-        s.devices = vec![device("d1", "Kitchen", true)];
+        s.devices = vec![
+            device("d1", "Kitchen", true),
+            device("d2", "Herdr Music", false),
+        ];
         let text = rendered(&state_with(Some(s)));
         assert!(text.contains("Kitchen"));
-        assert!(text.contains("Herdr Music (this laptop — restart)"));
+        assert!(text.contains("Herdr Music"));
         assert!(text.contains("enter select"));
-    }
-
-    #[test]
-    fn engine_status_line_shows_alert_and_starting() {
-        let mut s = snap(None);
-        s.local_status = LocalStatus::Starting;
-        s.local_alert = Some("starting local playback…".into());
-        assert!(rendered(&state_with(Some(s))).contains("starting local playback"));
-
-        let mut s = snap(None);
-        s.local_status = LocalStatus::Failed("engine went boom".into());
-        s.local_alert = Some("engine went boom".into());
-        assert!(rendered(&state_with(Some(s))).contains("engine went boom"));
     }
 
     #[test]

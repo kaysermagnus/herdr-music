@@ -1,47 +1,15 @@
 pub mod auth;
 pub mod client;
-pub mod local;
 pub mod tokens;
 
-use crate::provider::{Device, LocalStatus, MusicProvider, Playback, ProviderError};
+use crate::provider::{Device, MusicProvider, Playback, ProviderError};
 use client::Endpoints;
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::Method;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokens::{StoredTokens, TokenCache};
-
-/// How long the local engine may take to register as a Connect device
-/// before `local_status` gives up and reports a failure. The OAuth wait
-/// is longer — a human has to click through a browser flow.
-const READY_TIMEOUT: Duration = Duration::from_secs(20);
-const OAUTH_TIMEOUT: Duration = Duration::from_secs(180);
-
-/// Engine lifecycle inside the adapter. `Starting`/`Ready` hold the
-/// engine so dropping the provider (worker exit) kills the child.
-enum Phase {
-    NotStarted,
-    Starting {
-        engine: crate::engine::Engine,
-        name: String,
-        at: Instant,
-        /// True while waiting for the user to sign the engine in by
-        /// picking this device in their Spotify app (extends the
-        /// readiness deadline — it's human-paced).
-        oauth_pending: bool,
-    },
-    Ready {
-        engine: crate::engine::Engine,
-    },
-    Failed(String),
-    Disabled {
-        reason: String,
-        silent: bool,
-    },
-}
-
-type EngineInvocation = Box<dyn Fn(&str) -> Result<local::Invocation, String> + Send>;
 
 /// Spotify adapter for the `MusicProvider` seam. Blocking HTTP, token
 /// refresh handled internally behind `&self` via a Mutex'd token cache.
@@ -51,8 +19,6 @@ pub struct SpotifyProvider {
     client_id: String,
     tokens: Mutex<TokenCache>,
     token_path: PathBuf,
-    local: Mutex<Phase>,
-    engine_invocation: EngineInvocation,
 }
 
 impl SpotifyProvider {
@@ -66,7 +32,6 @@ impl SpotifyProvider {
         endpoints: Endpoints,
         state_dir: PathBuf,
     ) -> Self {
-        let dir = state_dir.clone();
         Self {
             http: Client::builder()
                 .timeout(Duration::from_secs(15))
@@ -76,19 +41,7 @@ impl SpotifyProvider {
             client_id: client_id.into(),
             tokens: Mutex::new(TokenCache::Unloaded),
             token_path: StoredTokens::token_path(&state_dir),
-            local: Mutex::new(Phase::NotStarted),
-            engine_invocation: Box::new(move |name| local::invocation(name, &dir)),
         }
-    }
-
-    /// Test seam: decide how the engine is invoked (binary, argv, sink,
-    /// pidfile) without touching the real librespot.
-    pub fn with_engine_invocation(
-        mut self,
-        f: impl Fn(&str) -> Result<local::Invocation, String> + Send + 'static,
-    ) -> Self {
-        self.engine_invocation = Box::new(f);
-        self
     }
 
     /// Access token, lazily loaded from disk and refreshed when inside the
@@ -259,142 +212,6 @@ impl MusicProvider for SpotifyProvider {
         }
         let body = resp.text().unwrap_or_default();
         Err(client::error_for_status(status, &body))
-    }
-
-    fn start_local(&self, name: &str) -> Result<(), ProviderError> {
-        let mut phase = self.local.lock().unwrap();
-        if matches!(*phase, Phase::Starting { .. } | Phase::Ready { .. }) {
-            return Ok(()); // already running or registering
-        }
-        let inv = match (self.engine_invocation)(name) {
-            Ok(inv) => inv,
-            Err(reason) => {
-                *phase = Phase::Disabled {
-                    reason,
-                    silent: false,
-                };
-                return Ok(());
-            }
-        };
-        let spawn = crate::engine::Spawn {
-            engine: crate::engine::Cmd {
-                program: &inv.program,
-                args: &inv.args,
-                envs: &[],
-            },
-            sink: inv.sink.as_ref().map(|(p, a)| crate::engine::Cmd {
-                program: p.as_path(),
-                args: a.as_slice(),
-                envs: &[],
-            }),
-            pidfile: &inv.pidfile,
-        };
-        match crate::engine::Engine::spawn(spawn) {
-            Ok(engine) => {
-                *phase = Phase::Starting {
-                    engine,
-                    name: name.to_string(),
-                    at: Instant::now(),
-                    oauth_pending: inv.oauth_pending,
-                };
-                Ok(())
-            }
-            Err(e) => Err(ProviderError::LocalPlayback(format!(
-                "local engine failed to start: {e}"
-            ))),
-        }
-    }
-
-    fn stop_local(&self) -> Result<(), ProviderError> {
-        // Dropping the phase kills the engine (kill-on-drop).
-        *self.local.lock().unwrap() = Phase::NotStarted;
-        Ok(())
-    }
-
-    fn local_status(&self) -> LocalStatus {
-        /// What this tick decided about the current phase.
-        enum Step {
-            Keep,
-            Fail(String),
-            ToReady,
-        }
-        let mut phase = self.local.lock().unwrap();
-        let step = match &mut *phase {
-            Phase::Starting {
-                engine,
-                name,
-                at,
-                oauth_pending,
-            } => {
-                let timeout = if *oauth_pending {
-                    OAUTH_TIMEOUT
-                } else {
-                    READY_TIMEOUT
-                };
-                if engine.exited() {
-                    let line = engine
-                        .last_error_line()
-                        .unwrap_or_else(|| "engine exited".into());
-                    Step::Fail(format!("local engine exited: {line}"))
-                } else if at.elapsed() > timeout {
-                    Step::Fail(if *oauth_pending {
-                        "pick this device in your Spotify app once to sign it in".into()
-                    } else {
-                        format!("local engine did not register within {READY_TIMEOUT:?}")
-                    })
-                } else {
-                    match self.devices() {
-                        // Absent from the list or a transient API error:
-                        // keep waiting until the deadline.
-                        Ok(devices) if devices.iter().any(|d| &d.name == name) => Step::ToReady,
-                        _ => Step::Keep,
-                    }
-                }
-            }
-            Phase::Ready { engine } => {
-                if engine.stderr_contains("audio key") {
-                    // Upstream block: the device registers and receives
-                    // the stream but Spotify denies decryption keys, so
-                    // tracks just skip. Failing kills the engine.
-                    Step::Fail(
-                        "Spotify is blocking playback on this laptop (upstream restriction)".into(),
-                    )
-                } else if engine.exited() {
-                    let line = engine
-                        .last_error_line()
-                        .unwrap_or_else(|| "engine exited".into());
-                    Step::Fail(format!("local engine exited: {line}"))
-                } else {
-                    Step::Keep
-                }
-            }
-            _ => Step::Keep,
-        };
-        match step {
-            Step::Keep => match &*phase {
-                Phase::NotStarted => LocalStatus::NotStarted,
-                Phase::Starting { .. } => LocalStatus::Starting,
-                Phase::Ready { .. } => LocalStatus::Ready,
-                Phase::Failed(r) => LocalStatus::Failed(r.clone()),
-                Phase::Disabled { reason, silent } => LocalStatus::Disabled {
-                    reason: reason.clone(),
-                    silent: *silent,
-                },
-            },
-            Step::Fail(reason) => {
-                *phase = Phase::Failed(reason.clone());
-                LocalStatus::Failed(reason)
-            }
-            Step::ToReady => {
-                let Phase::Starting { engine, .. } =
-                    std::mem::replace(&mut *phase, Phase::NotStarted)
-                else {
-                    unreachable!("Step::ToReady only from Starting")
-                };
-                *phase = Phase::Ready { engine };
-                LocalStatus::Ready
-            }
-        }
     }
 }
 

@@ -6,21 +6,18 @@ first adapter is **Spotify**.
 
 - Now playing: track, artists, album, progress bar, device
 - Controls: play / pause / stop, next / previous, seek ±10s
-- **Local playback**: the laptop itself becomes a Spotify Connect device
-  while the player pane is open (press `d` to pick where music plays)
+- Device picker: `d` lists your Spotify Connect devices, Enter moves
+  playback there
 - Headless actions for every control, bindable to Herdr keys
 - Small footprint: ~3 MB static binary, no async runtime, minimal deps
 
 ## Prerequisites
 
-- **Rust** (stable, ≥ 1.85 — required by the playback engine) — for
-  building. On Windows this means the MSVC toolchain.
-- **Spotify Premium** — required by both the Web API and local playback
+- **Rust** (stable) — for building
+- **Spotify Premium** — required by the Web API
 - A **Spotify Developer app**: create one at
   <https://developer.spotify.com/dashboard> and add
   `http://127.0.0.1:8888/callback` as a Redirect URI
-- On **Linux**, one audio player: `pw-play` (PipeWire), `paplay`
-  (PulseAudio), or `aplay` (ALSA) — almost always already installed
 
 ## Configure
 
@@ -35,21 +32,7 @@ or in `config.toml` inside the plugin config dir
 
 ```toml
 spotify_client_id = "your_client_id"
-
-# Optional: local playback (both have these defaults)
-local_playback = false         # opt-in; see the note below
-local_device_name = "Herdr Music"
 ```
-
-**Local playback is opt-in and currently blocked upstream.** As of
-2026-11 Spotify denies audio-decryption keys to every credential type a
-third-party client can mint (librespot#1737) — the device registers and
-receives the stream but tracks fail to play. The plugin detects this
-signature and reports it instead of silently skipping. If librespot
-ships a fix, `cargo install` gets the new pinned version and enabling
-`local_playback` lights the feature up: the engine signs in by
-appearing in your Spotify app's device list (pick it once) and plays
-through the OS audio stack.
 
 ## Install
 
@@ -65,12 +48,6 @@ From GitHub (once pushed):
 ```sh
 herdr plugin install kaysermagnus/herdr-music
 ```
-
-The `[[build]]` steps in `herdr-plugin.toml` run `cargo build --release`,
-then compile [librespot](https://github.com/librespot-org/librespot)
-(MIT) — the Spotify Connect engine used for local playback — pinned to
-version 0.8.0. The engine build takes a few minutes on a clean machine;
-re-installs are fast when the pinned version is already present.
 
 ## Use
 
@@ -107,14 +84,11 @@ dirs): `herdr-music tui`, `herdr-music ctl next`, `herdr-music status`,
 The level meter moves while playing and rests while paused. The center
 glyph is the action `space` will take.
 
-### Local playback and devices
+### Devices
 
-While the pane is open, a bundled librespot engine registers this laptop
-as a Connect device. Press `d` to open the device picker — every Connect
-device on the account plus this laptop — and Enter (or click) to move
-playback there. The engine starts and stops with the pane; nothing keeps
-playing or lingers after you quit. On Linux it pipes audio to `pw-play`,
-`paplay`, or `aplay`; on macOS and Windows it uses the OS audio stack.
+Press `d` to open the device picker: every Spotify Connect device on the
+account, with the active one marked. Enter (or click) transfers playback
+to the highlighted device — handy when nothing is playing anywhere.
 
 Mouse: click `◀◀` / `▶` / `▶▶` to skip back, play/pause, or skip ahead.
 Click anywhere on the bar to jump to that spot. The player captures the
@@ -171,11 +145,4 @@ cargo build --release
 ```
 
 Specs live in `specs/`: the original plugin spec is `specs/initial.md`,
-with its task breakdown in `specs/initial-tasks.md`, and local playback
-in `specs/local-playback.md`.
-
-## Credits
-
-Local playback uses [librespot](https://github.com/librespot-org/librespot),
-built from crates.io at install time under the MIT license. It is
-compiled on your machine — no binary is bundled or redistributed.
+with its task breakdown in `specs/initial-tasks.md`.

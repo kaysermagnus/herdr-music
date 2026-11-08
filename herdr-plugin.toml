@@ -8,23 +8,6 @@ platforms = ["linux", "macos", "windows"]
 [[build]]
 command = ["cargo", "build", "--release"]
 
-# Local playback engine. Pinned to local::ENGINE_VERSION in the code.
-# rustls-tls-webpki-roots on every OS (native-tls needs OpenSSL headers on
-# Linux); zeroconf sign-in via with-dns-sd on macOS (native Bonjour —
-# libmdns doesn't advertise on multi-interface Macs) and with-libmdns
-# elsewhere; rodio on macOS/Windows (CoreAudio/WASAPI), pipe on Linux.
-[[build]]
-platforms = ["linux"]
-command = ["cargo", "install", "librespot", "--version", "0.8.0", "--locked", "--root", "./target/librespot", "--no-default-features", "--features", "rustls-tls-webpki-roots,with-libmdns"]
-
-[[build]]
-platforms = ["windows"]
-command = ["cargo", "install", "librespot", "--version", "0.8.0", "--locked", "--root", "./target/librespot", "--no-default-features", "--features", "rustls-tls-webpki-roots,rodio-backend,with-libmdns"]
-
-[[build]]
-platforms = ["macos"]
-command = ["cargo", "install", "librespot", "--version", "0.8.0", "--locked", "--root", "./target/librespot", "--no-default-features", "--features", "rustls-tls-webpki-roots,rodio-backend,with-dns-sd"]
-
 [[panes]]
 id = "player"
 title = "Music"

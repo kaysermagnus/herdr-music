@@ -32,7 +32,7 @@ impl Playback {
     }
 }
 
-/// A Spotify Connect device: the local laptop is just one more entry.
+/// A Spotify Connect device the user can transfer playback to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Device {
     pub id: String,
@@ -40,29 +40,11 @@ pub struct Device {
     pub is_active: bool,
 }
 
-/// State of the local playback engine, if the provider runs one.
-/// `Disabled { silent }` marks reasons the user shouldn't be nagged about
-/// on the status line (missing scope, deliberate config), surfaced only
-/// inside the device picker.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum LocalStatus {
-    #[default]
-    NotStarted,
-    Starting,
-    Ready,
-    Failed(String),
-    Disabled {
-        reason: String,
-        silent: bool,
-    },
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderError {
     NotAuthenticated,
     NoActiveDevice,
     PremiumRequired,
-    LocalPlayback(String),
     Api(String),
 }
 
@@ -78,7 +60,7 @@ impl fmt::Display for ProviderError {
             Self::PremiumRequired => {
                 write!(f, "playback control requires a Premium account")
             }
-            Self::LocalPlayback(msg) | Self::Api(msg) => write!(f, "{msg}"),
+            Self::Api(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -121,34 +103,11 @@ pub trait MusicProvider: Send {
         self.seek(seek_clamped(pb.progress, delta_secs, pb.track.duration))
     }
 
-    /// Every Connect device on the account, local or remote.
+    /// Every Connect device on the account.
     fn devices(&self) -> Result<Vec<Device>, ProviderError>;
 
     /// Move playback to `device_id`, keeping it playing if it was.
     fn transfer(&self, device_id: &str) -> Result<(), ProviderError>;
-
-    /// Start the provider's local engine under `name`. Disabled
-    /// preconditions (missing scope, missing binary) land on
-    /// `local_status()`; genuine start failures return
-    /// `ProviderError::LocalPlayback`. Providers without an engine get the
-    /// defaults below and need no changes.
-    fn start_local(&self, _name: &str) -> Result<(), ProviderError> {
-        Err(ProviderError::Api("local playback not supported".into()))
-    }
-
-    /// Stop the local engine, if running. Default is a no-op.
-    fn stop_local(&self) -> Result<(), ProviderError> {
-        Ok(())
-    }
-
-    /// Current engine state; polled on each refresh tick. Providers
-    /// without an engine report disabled.
-    fn local_status(&self) -> LocalStatus {
-        LocalStatus::Disabled {
-            reason: "local playback not supported".into(),
-            silent: true,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -165,8 +124,6 @@ pub mod testing {
         pub calls: Mutex<Vec<String>>,
         pub error: Mutex<Option<ProviderError>>,
         pub device_list: Mutex<Vec<Device>>,
-        pub local_status: Mutex<LocalStatus>,
-        pub start_local_error: Mutex<Option<ProviderError>>,
     }
 
     impl FakeProvider {
@@ -176,17 +133,11 @@ pub mod testing {
                 calls: Mutex::new(Vec::new()),
                 error: Mutex::new(None),
                 device_list: Mutex::new(Vec::new()),
-                local_status: Mutex::new(LocalStatus::NotStarted),
-                start_local_error: Mutex::new(None),
             }
         }
 
         pub fn set_devices(&self, devices: Vec<Device>) {
             *self.device_list.lock().unwrap() = devices;
-        }
-
-        pub fn set_local_status(&self, status: LocalStatus) {
-            *self.local_status.lock().unwrap() = status;
         }
 
         pub fn push_playback(&self, pb: Option<Playback>) {
@@ -275,26 +226,6 @@ pub mod testing {
                 .unwrap()
                 .push(format!("transfer:{device_id}"));
             Ok(())
-        }
-
-        fn start_local(&self, name: &str) -> Result<(), ProviderError> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("start_local:{name}"));
-            if let Some(e) = self.start_local_error.lock().unwrap().clone() {
-                return Err(e);
-            }
-            Ok(())
-        }
-
-        fn stop_local(&self) -> Result<(), ProviderError> {
-            self.calls.lock().unwrap().push("stop_local".into());
-            Ok(())
-        }
-
-        fn local_status(&self) -> LocalStatus {
-            self.local_status.lock().unwrap().clone()
         }
     }
 }

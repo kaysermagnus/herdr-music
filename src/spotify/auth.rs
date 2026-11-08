@@ -16,7 +16,7 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(180);
 const CALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 const SCOPES: &str =
-    "user-read-playback-state user-modify-playback-state user-read-currently-playing streaming";
+    "user-read-playback-state user-modify-playback-state user-read-currently-playing";
 
 /// Loopback redirect registered in the Spotify app settings.
 pub fn redirect_uri(port: u16) -> String {
@@ -465,7 +465,6 @@ mod tests {
             "user-read-playback-state",
             "user-modify-playback-state",
             "user-read-currently-playing",
-            "streaming",
         ] {
             assert!(url.contains(scope));
         }

@@ -37,7 +37,7 @@ fn dispatch(req: Requested) -> Result<()> {
         Requested::Tui => {
             let cfg = AppConfig::load();
             let provider = spotify::provider_from_config(&cfg)?;
-            tui::run(Box::new(provider), cfg.local_device())
+            tui::run(Box::new(provider))
         }
         Requested::Status => status(),
         Requested::Ctl(name) => ctl(&name),
