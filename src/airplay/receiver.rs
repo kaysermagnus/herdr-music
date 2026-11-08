@@ -9,7 +9,7 @@
 use super::sink::{self, Sink};
 use super::state::{SenderEvent, SessionState};
 use super::DacpSenderControl;
-use shairplay::{AudioFormat, AudioHandler, AudioSession, RaopServer};
+use shairplay::{Ap1Encryption, AudioFormat, AudioHandler, AudioSession, RaopServer};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -104,12 +104,7 @@ fn serve(
             player,
             sink_pid,
         });
-        let mut server = match RaopServer::builder()
-            .name(name)
-            .output_sample_rate(44_100)
-            .output_max_channels(2)
-            .build(handler)
-        {
+        let mut server = match build_server(name, handler) {
             Ok(server) => server,
             Err(e) => {
                 report(&state, format!("airplay receiver: {e}"));
@@ -123,6 +118,21 @@ fn serve(
         let _ = stop.await;
         server.stop().await;
     });
+}
+
+/// The RAOP server as advertised. `build` binds nothing, so tests can
+/// inspect the advert.
+fn build_server(
+    name: String,
+    handler: Arc<dyn AudioHandler>,
+) -> Result<RaopServer, shairplay::ShairplayError> {
+    RaopServer::builder()
+        .name(name)
+        .output_sample_rate(44_100)
+        .output_max_channels(2)
+        // iOS senders stream RSA-encrypted ALAC; the crate's et=0 default makes them fail at play.
+        .advertise_encryption([Ap1Encryption::None, Ap1Encryption::Rsa])
+        .build(handler)
 }
 
 /// Land a receiver-side failure on the status row.
@@ -248,12 +258,33 @@ impl AudioSession for PcmSession {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    struct Silent;
+    impl AudioSession for Silent {
+        fn audio_process(&mut self, _: &[f32]) {}
+    }
+    struct NoAudio;
+    impl AudioHandler for NoAudio {
+        fn audio_init(&self, _: AudioFormat) -> Box<dyn AudioSession> {
+            Box::new(Silent)
+        }
+    }
+
+    /// iPhones fail at play against an et=0-only advert (verified live).
+    #[test]
+    fn advert_offers_rsa_encryption() {
+        let server = build_server("Test".into(), Arc::new(NoAudio)).expect("build");
+        let txt = server.service_info().raop_txt;
+        let et = txt.iter().find(|(k, _)| k == "et").map(|(_, v)| v.as_str());
+        assert_eq!(et, Some("0,1"));
+    }
+
     /// The `Receiver::drop` escape hatch for a player that stopped
     /// consuming: killing the stored pid unblocks the stdin write.
+    #[cfg(unix)]
     #[test]
     fn kill_player_terminates_a_stuck_child() {
         let mut child = std::process::Command::new("sleep")
