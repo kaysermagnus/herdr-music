@@ -1,12 +1,17 @@
 id = "herdr-music"
 name = "Music"
-version = "0.2.0"
+version = "0.3.0"
 min_herdr_version = "0.7.0"
 description = "TUI music controller — Spotify via OAuth, or an AirPlay receiver"
-platforms = ["linux", "macos", "windows"]
+platforms = ["linux", "macos"]
 
+# Binary-first install: fetch the prebuilt release binary for `version`
+# above (see scripts/fetch-binary.sh), falling back to `cargo build
+# --release` when the download fails and Rust is installed. `bash` not
+# `sh`: the script needs `set -o pipefail`, which dash lacks.
 [[build]]
-command = ["cargo", "build", "--release"]
+platforms = ["linux", "macos"]
+command = ["bash", "scripts/fetch-binary.sh"]
 
 [[panes]]
 id = "player"

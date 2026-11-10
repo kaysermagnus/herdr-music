@@ -14,7 +14,9 @@ first adapter is **Spotify**, the second an **AirPlay receiver**.
 
 ## Prerequisites
 
-- **Rust** (stable) — for building
+- **Rust** (stable) — only when building from source; `herdr plugin
+  install` uses it solely as a fallback when no prebuilt binary can be
+  fetched
 - **Spotify Premium** — required by the Web API
 - A **Spotify Developer app**: create one at
   <https://developer.spotify.com/dashboard> and add
@@ -45,17 +47,25 @@ spotify_client_id = "your_client_id"
 
 ## Install
 
+```sh
+herdr plugin install kaysermagnus/herdr-music
+```
+
+Install is binary-first: the manifest's `[[build]]` step runs
+`scripts/fetch-binary.sh`, which downloads the prebuilt binary from the
+GitHub release tagged `v<version>` — `version` in `herdr-plugin.toml`,
+never `/latest` — verifies it against the release's `SHA256SUMS`, and
+places it at `target/release/herdr-music`. If the download fails and
+`cargo` is on PATH it falls back to `cargo build --release`; otherwise
+the install fails. Releases ship binaries for
+`x86_64-unknown-linux-gnu`, `x86_64-apple-darwin` and
+`aarch64-apple-darwin`. Linux and macOS only.
+
 From source during development:
 
 ```sh
 cargo build --release
 herdr plugin link /path/to/herdr-music
-```
-
-From GitHub (once pushed):
-
-```sh
-herdr plugin install kaysermagnus/herdr-music
 ```
 
 ## Use
@@ -197,6 +207,7 @@ with its task breakdown in `specs/initial-tasks.md`.
 - [ratatui](https://ratatui.rs) + crossterm — the TUI
 - [shairplay](https://github.com/metaneutrons/shairplay-rust) — the AirPlay
   receiver, **LGPL-3.0**. Rust links crates statically, which LGPL §4(d)(0)
-  allows when the user can relink a modified library; this plugin is
-  distributed as source and `cargo build --release` runs on your machine,
-  so replacing the crate and rebuilding is the relink. See `NOTICE`.
+  allows when the user can relink a modified library; the source and the
+  build scripts ship with every install, so `cargo build --release` with a
+  patched shairplay and dropping the result into `target/release/` is the
+  relink. See `NOTICE`.

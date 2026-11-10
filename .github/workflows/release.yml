@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # Fail fast when the tag doesn't match the version the install
+  # scripts will fetch (version in herdr-plugin.toml). On a manual
+  # dispatch — a dry run, not a tagged release — only warn.
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches manifest version
+        run: |
+          version="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' herdr-plugin.toml | head -n 1)"
+          if [ -z "$version" ]; then
+            echo "::error::could not read version from herdr-plugin.toml"
+            exit 1
+          fi
+          echo "manifest version: $version; ref: ${{ github.ref_name }}"
+          if [ "${{ github.ref_name }}" != "v$version" ]; then
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "::warning::ref ${{ github.ref_name }} != v$version in herdr-plugin.toml (dry run)"
+            else
+              echo "::error::tag ${{ github.ref_name }} does not match version $version in herdr-plugin.toml"
+              exit 1
+            fi
+          fi
+
+  build:
+    needs: guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux deps (alsa-sys)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/herdr-music" \
+            "dist/herdr-music-${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herdr-music-${{ matrix.target }}
+          path: dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: herdr-music-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum herdr-music-* > SHA256SUMS
+          cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: dist/*
